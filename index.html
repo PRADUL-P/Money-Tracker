@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Daily Money Tracker</title>
+
+  <meta name="theme-color" content="#2563eb" />
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="app">
+    <!-- Top bar -->
+    <header class="app-header card">
+      <div>
+        <h1>Daily Money Tracker</h1>
+        <p class="subtitle">Offline, local-storage based money tracker.</p>
+      </div>
+      <nav class="nav-tabs">
+        <button class="nav-tab active" data-view="entry">Entry</button>
+        <button class="nav-tab" data-view="summary">Summary</button>
+      </nav>
+    </header>
+
+    <!-- ENTRY VIEW -->
+    <main id="view-entry" class="view active">
+      <!-- Selected date + daily summary -->
+      <section class="card">
+        <div class="daily-header">
+          <div>
+            <div class="daily-label">Selected date</div>
+            <div id="selectedDateLabel" class="selected-date-text"></div>
+          </div>
+          <div class="date-input-wrap">
+            <input type="date" id="date" />
+          </div>
+        </div>
+
+        <div class="summary-row">
+          <div>
+            <div class="summary-tag">Today Expense</div>
+            <div class="summary-value expense" id="sumExpense">₹0</div>
+          </div>
+          <div>
+            <div class="summary-tag">Today Income</div>
+            <div class="summary-value income" id="sumIncome">₹0</div>
+          </div>
+          <div>
+            <div class="summary-tag">Net</div>
+            <div class="summary-value net" id="sumNet">₹0</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Entry form -->
+      <section class="card">
+        <div class="section-title" id="formTitle">Add entry for this day</div>
+        <form id="money-form">
+          <label for="type">Type</label>
+          <select id="type">
+            <option value="Expense">Expense</option>
+            <option value="Income">Income</option>
+          </select>
+
+          <label for="description">Description</label>
+          <input type="text" id="description" placeholder="Food, Bus, Rent, Salary..." required />
+
+          <label for="category">Category</label>
+          <input type="text" id="category" placeholder="Food, Travel, Bills, Salary..." />
+          <div class="pill-row" id="category-pills">
+            <button type="button" class="pill" data-value="Food">Food</button>
+            <button type="button" class="pill" data-value="Travel">Travel</button>
+            <button type="button" class="pill" data-value="Bills">Bills</button>
+            <button type="button" class="pill" data-value="Shopping">Shopping</button>
+            <button type="button" class="pill" data-value="Salary">Salary</button>
+            <button type="button" class="pill" data-value="Other">Other</button>
+          </div>
+
+          <div class="row">
+            <div>
+              <label for="payMethod">Payment</label>
+              <select id="payMethod">
+                <option>Cash</option>
+                <option>UPI</option>
+                <option>Card</option>
+                <option>Bank</option>
+              </select>
+            </div>
+            <div>
+              <label for="amount">Amount</label>
+              <input type="number" id="amount" min="0" step="0.01" required />
+            </div>
+          </div>
+
+          <!-- Extra optional field (more options) -->
+          <label for="note">Note (optional)</label>
+          <textarea id="note" rows="2" placeholder="Any extra details..."></textarea>
+
+          <button type="submit" class="btn-primary" id="submitBtn">Save entry</button>
+          <button type="button" class="btn-secondary" id="clear-btn">Clear form</button>
+
+          <div class="status" id="status"></div>
+        </form>
+      </section>
+
+      <!-- Entries list -->
+      <section class="card">
+        <div class="section-title">Entries for this day</div>
+        <div id="entriesList" class="list"></div>
+      </section>
+    </main>
+
+    <!-- SUMMARY VIEW -->
+    <main id="view-summary" class="view">
+      <section class="card">
+        <div class="section-title">Monthly summary by category</div>
+        <div class="row">
+          <div>
+            <label for="monthPicker">Month</label>
+            <input type="month" id="monthPicker" />
+          </div>
+          <div>
+            <div class="summary-tag">Total Expense</div>
+            <div class="summary-value expense" id="monthSumExpense">₹0</div>
+            <div class="summary-tag" style="margin-top:0.25rem;">Total Income</div>
+            <div class="summary-value income" id="monthSumIncome">₹0</div>
+          </div>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="section-title">Expense by category (Pie chart)</div>
+        <canvas id="categoryPie" height="220"></canvas>
+        <div id="categoryLegend" class="legend"></div>
+      </section>
+
+      <section class="card">
+        <div class="section-title">Backup & Restore</div>
+        <p class="info">
+          Export your data as CSV (Excel / Google Sheets) or JSON backup.  
+          Import will replace current data.
+        </p>
+        <div class="backup-row">
+          <button type="button" class="btn-secondary" id="exportCsvBtn">Export CSV</button>
+          <button type="button" class="btn-secondary" id="exportJsonBtn">Export JSON</button>
+        </div>
+        <div class="import-row">
+          <input type="file" id="importFile" accept=".csv,text/csv,application/json,.json" />
+          <button type="button" class="btn-primary" id="importBtn">Import & replace</button>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="section-title">About this app</div>
+        <p class="info">
+          • Data is stored only in this browser (localStorage).<br />
+          • Works offline and can be installed as a PWA.<br />
+          • Use the Entry tab for daily recording and Summary tab for monthly analysis.
+        </p>
+        <div class="chips-row">
+          <span class="chip">Offline</span>
+          <span class="chip">Local storage</span>
+          <span class="chip">PWA-ready</span>
+          <span class="chip">Category pie chart</span>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="app.js" defer></script>
+</body>
+</html>
