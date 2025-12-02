@@ -22,8 +22,8 @@ const DEFAULTS = {
 function loadStore(){
   try{
     const raw = localStorage.getItem(STORAGE_KEY);
-    return raw ? JSON.parse(raw) : { version:1, days:{}, settings: DEFAULTS.settings };
-  }catch(e){ console.error(e); return { version:1, days:{}, settings: DEFAULTS.settings }; }
+    return raw ? JSON.parse(raw) : { version:1, days:{}, settings: DEFAULTS.settings, accounts:{}, paymentBankMap:{} };
+  }catch(e){ console.error(e); return { version:1, days:{}, settings: DEFAULTS.settings, accounts:{}, paymentBankMap:{} }; }
 }
 function saveStore(store){ localStorage.setItem(STORAGE_KEY, JSON.stringify(store)); }
 
@@ -38,6 +38,7 @@ const authScreen = document.getElementById('authScreen');
 const authForm = document.getElementById('authForm');
 const authNameRow = document.getElementById('authNameRow');
 const authNameInput = document.getElementById('authName');
+const authSecurityHintInput = document.getElementById('authSecurityHint');
 const authPasswordInput = document.getElementById('authPassword');
 const authSubmitBtn = document.getElementById('authSubmitBtn');
 const forgotBtn = document.getElementById('forgotBtn');
@@ -121,8 +122,16 @@ const newPasswordInput = document.getElementById('newPassword');
 const changePasswordBtn = document.getElementById('changePasswordBtn');
 const passwordStatusEl = document.getElementById('passwordStatus');
 
+const rowsPerPageSelect = document.getElementById('rowsPerPage');
+const summaryExportBtn = document.getElementById('summaryExportBtn');
+
+const accountsMonthInput = document.getElementById('accountsMonth');
+const accountsBankSelect = document.getElementById('accountsBankSelect');
+const accountsInitialAmount = document.getElementById('accountsInitialAmount');
+const saveInitialBtn = document.getElementById('saveInitialBtn');
+const bankBalancesList = document.getElementById('bankBalancesList');
+
 let currentEdit = null;
-let store = loadStore();
 let custom = loadCustom();
 
 /* ---------- util ---------- */
@@ -158,7 +167,8 @@ function setupAuth(){
     const existing = loadUser();
     if(!existing){
       const name = authNameInput.value.trim() || 'User';
-      const u = { name, password: pw, biometricPreferred:false, securityHint:'' };
+      const hint = authSecurityHintInput ? authSecurityHintInput.value.trim() : '';
+      const u = { name, password: pw, biometricPreferred:false, securityHint: hint };
       saveUser(u);
       enterApp();
     } else {
@@ -234,11 +244,16 @@ function initNav(){
       mainMenu.style.display='none';
     });
   });
+
   menuToggle.addEventListener('click', e=>{
     e.stopPropagation();
-    mainMenu.style.display = mainMenu.style.display==='block' ? 'none' : 'block';
+    const isOpen = mainMenu.classList.toggle('open');
+    mainMenu.style.display = isOpen ? 'block' : 'none';
   });
-  document.addEventListener('click', () => { mainMenu.style.display='none'; });
+
+  mainMenu.addEventListener('click', e => e.stopPropagation());
+  document.addEventListener('click', () => { mainMenu.classList.remove('open'); mainMenu.style.display='none'; });
+
   mainMenu.querySelectorAll('button').forEach(b=>{
     b.addEventListener('click', ()=> {
       const to = b.dataset.to;
@@ -253,6 +268,7 @@ function showView(name){
   document.querySelectorAll('.view').forEach(v=>v.classList.remove('active'));
   if(!name || name==='entry') document.getElementById('view-entry').classList.add('active');
   if(name==='summary') document.getElementById('view-summary').classList.add('active');
+  if(name==='accounts') document.getElementById('view-accounts').classList.add('active');
   if(name==='settings') document.getElementById('view-settings').classList.add('active');
   if(name==='user') document.getElementById('view-user').classList.add('active');
   if(name==='about') document.getElementById('view-about').classList.add('active');
@@ -264,11 +280,11 @@ function showView(name){
     else btn.classList.remove('active');
   });
 
-  // view-specific renders
   try { if(name === 'summary') renderSummary(); } catch(e){}
   try { if(name === 'entry' || !name) renderEntries(); } catch(e){}
   try { if(name === 'settings') renderSettingsUI(); } catch(e){}
   try { if(name === 'user') renderUserUI(); } catch(e){}
+  try { if(name === 'accounts') renderBankBalances(); } catch(e){}
 }
 
 /* ------------- DATE & FORM UI ------------- */
@@ -278,11 +294,11 @@ function initDatePickers(){
   const m = String(now.getMonth()+1).padStart(2,'0');
   monthPicker.value = `${y}-${m}`;
   yearPicker.value = y;
+  accountsMonthInput.value = monthPicker.value;
   dateInput.value = new Date(Date.now() - getTZOffsetMs()).toISOString().slice(0,10);
   updateSelectedDateLabel();
   dateInput.addEventListener('change', ()=> { updateSelectedDateLabel(); renderEntries(); });
 }
-function getTZOffsetMs(){ return new Date().getTimezoneOffset()*60000; }
 function updateSelectedDateLabel(){ selectedDateLabel.textContent = formatDateLabel(dateInput.value); }
 
 function renderCategoryPills(){
@@ -328,6 +344,26 @@ function updatePaySubTypeOptions(){
   };
 }
 
+/* transfer UI */
+function updateTransferUI(){
+  const method = payMethodSelect.value;
+  const wrap = document.getElementById('transferWrap');
+  if(method === 'Self transfer' || typeEl.value === 'Transfer'){
+    wrap.style.display = 'block';
+    const s = loadStore();
+    const banks = s.settings && s.settings.banks ? s.settings.banks : DEFAULTS.settings.banks;
+    const from = document.getElementById('transferFrom');
+    const to = document.getElementById('transferTo');
+    from.innerHTML = ''; to.innerHTML = '';
+    banks.forEach(b=>{
+      const o1 = document.createElement('option'); o1.value=b; o1.textContent=b; from.appendChild(o1);
+      const o2 = document.createElement('option'); o2.value=b; o2.textContent=b; to.appendChild(o2);
+    });
+  } else {
+    wrap.style.display = 'none';
+  }
+}
+
 /* split UI behavior */
 isGroupCheckbox.addEventListener('change', ()=> {
   splitOptions.style.display = isGroupCheckbox.checked ? 'block' : 'none';
@@ -338,62 +374,95 @@ splitModeSelect.addEventListener('change', ()=>{
   myShareWrap.style.display = isCustom ? 'block' : 'none';
 });
 
+/* update selects color for desktop users (workaround) */
+function ensureSelectColors(){
+  document.querySelectorAll('select').forEach(s => s.style.color = getComputedStyle(document.body).getPropertyValue('--text') || '');
+}
+
 /* ------------- FORM submit (add/update) ------------- */
 form.addEventListener('submit', (e)=>{
   e.preventDefault();
   const dateStr = dateInput.value;
   if(!dateStr){ statusEl.textContent = 'Choose a date'; return; }
   const type = typeEl.value;
-  const amount = parseFloat(amountEl.value) || 0;
+  const amountValue = parseFloat(amountEl.value) || 0;
   const description = descriptionEl.value.trim();
   const category = categoryEl.value.trim();
   const payMethod = payMethodSelect.value;
   const paySubType = (paySubTypeWrap.style.display==='none') ? '' : (paySubTypeSelect.value==='__custom__' ? '' : paySubTypeSelect.value);
   const note = noteInput.value.trim();
 
-  if(!description || !amount){ statusEl.textContent = 'Enter description and amount'; return; }
+  if(!description || (!amountEl.value && type !== 'Transfer')){ statusEl.textContent = 'Enter description and amount'; return; }
 
-  const entry = {
+  const transferFrom = document.getElementById('transferFrom') ? document.getElementById('transferFrom').value : '';
+  const transferTo = document.getElementById('transferTo') ? document.getElementById('transferTo').value : '';
+
+  let entry = {
     id: currentEdit ? currentEdit.id : Date.now(),
-    type, description, category, payMethod, paySubType,
-    amount: 0, note, createdAt: new Date().toISOString(), split: null
+    type,
+    description,
+    category,
+    payMethod,
+    paySubType,
+    amount: 0,
+    note,
+    createdAt: new Date().toISOString(),
+    split: null
   };
 
-  if(isGroupCheckbox.checked){
-    const participants = splitNamesInput.value.trim() ? splitNamesInput.value.split(',').map(s=>s.trim()).filter(Boolean) : [];
-    if(participants.length === 0){ alert('Provide participants for split'); return; }
-
-    if(splitModeSelect.value === 'equal'){
-      const totalPeople = participants.length + 1;
-      const per = +(amount / totalPeople).toFixed(2);
-      const participantsSplit = participants.map(p => ({ name: p, amount: per, received: false }));
-      const myShare = per;
-      entry.amount = myShare;
-      entry.split = { enabled: true, participants: participantsSplit, myShare: myShare, mode: 'equal', status: 'pending' };
-    } else {
-      const raw = splitAmountsInput.value.trim();
-      if(!raw){ alert('Provide custom amounts for participants'); return; }
-      const arr = raw.split(',').map(s => parseFloat(s.trim()) || 0);
-      if(arr.length !== participants.length){ alert('Number of custom amounts must match participants'); return; }
-      const participantsSplit = participants.map((p,i) => ({ name: p, amount: +arr[i].toFixed(2), received: false }));
-      const sumOthers = arr.reduce((a,b)=>a+b,0);
-      const myShare = +(amount - sumOthers).toFixed(2);
-      if(myShare < 0){ alert('Custom amounts exceed total. Fix amounts.'); return; }
-      entry.amount = myShare;
-      entry.split = { enabled: true, participants: participantsSplit, myShare: myShare, mode: 'custom', status: (participantsSplit.every(p=>p.received)?'settled':'pending') };
-    }
-  } else {
-    entry.amount = amount;
+  // map payment to bank automatically if mapping exists
+  const s = loadStore();
+  const map = s.paymentBankMap || {};
+  if(payMethod === 'UPI' && paySubType){
+    const mapped = map[`upi:${paySubType}`];
+    if(mapped) entry.mappedBank = mapped;
+  }
+  if(payMethod === 'Card' && paySubType){
+    const mapped = map[`card:${paySubType}`];
+    if(mapped) entry.mappedBank = mapped;
   }
 
-  const s = loadStore();
+  if(type === 'Transfer' || payMethod === 'Self transfer'){
+    // store as transfer; amountValue used
+    entry.type = 'Transfer';
+    entry.amount = +amountValue;
+    entry.transfer = { from: transferFrom || '', to: transferTo || '' };
+  } else {
+    // normal expense/income or split
+    if(isGroupCheckbox.checked){
+      const participants = splitNamesInput.value.trim() ? splitNamesInput.value.split(',').map(s=>s.trim()).filter(Boolean) : [];
+      if(participants.length === 0){ alert('Provide participants for split'); return; }
+
+      if(splitModeSelect.value === 'equal'){
+        const totalPeople = participants.length + 1;
+        const per = +(amountValue / totalPeople).toFixed(2);
+        const participantsSplit = participants.map(p => ({ name: p, amount: per, received: false }));
+        const myShare = per;
+        entry.amount = myShare;
+        entry.split = { enabled: true, participants: participantsSplit, myShare: myShare, mode: 'equal', status: 'pending' };
+      } else {
+        const raw = splitAmountsInput.value.trim();
+        if(!raw){ alert('Provide custom amounts for participants'); return; }
+        const arr = raw.split(',').map(s => parseFloat(s.trim()) || 0);
+        if(arr.length !== participants.length){ alert('Number of custom amounts must match participants'); return; }
+        const participantsSplit = participants.map((p,i) => ({ name: p, amount: +arr[i].toFixed(2), received: false }));
+        const sumOthers = arr.reduce((a,b)=>a+b,0);
+        const myShare = +(amountValue - sumOthers).toFixed(2);
+        if(myShare < 0){ alert('Custom amounts exceed total. Fix amounts.'); return; }
+        entry.amount = myShare;
+        entry.split = { enabled: true, participants: participantsSplit, myShare: myShare, mode: 'custom', status: (participantsSplit.every(p=>p.received)?'settled':'pending') };
+      }
+    } else {
+      entry.amount = amountValue;
+    }
+  }
+
   if(currentEdit){
-    // remove old
-    const dayArr = s.days[currentEdit.dateStr] || [];
-    const idx = dayArr.findIndex(x => x.id === currentEdit.id);
-    if(idx >= 0){
-      dayArr.splice(idx, 1);
-      if(dayArr.length === 0) delete s.days[currentEdit.dateStr];
+    // remove old (if present)
+    const oldDate = currentEdit.dateStr;
+    if(s.days[oldDate]){
+      s.days[oldDate] = s.days[oldDate].filter(x => x.id !== currentEdit.id);
+      if(s.days[oldDate].length === 0) delete s.days[oldDate];
     }
     if(!s.days[dateStr]) s.days[dateStr] = [];
     s.days[dateStr].push(entry);
@@ -401,14 +470,17 @@ form.addEventListener('submit', (e)=>{
     currentEdit = null;
     submitBtn.textContent = 'Save entry';
     statusEl.textContent = 'Updated ✓';
+    showToast('Updated');
   } else {
     if(!s.days[dateStr]) s.days[dateStr] = [];
     s.days[dateStr].push(entry);
     saveStore(s);
     statusEl.textContent = 'Saved ✓';
+    showToast('Saved');
   }
 
   form.reset(); splitOptions.style.display='none'; customSplitsDiv.style.display='none'; myShareWrap.style.display='none';
+  updatePaySubTypeOptions(); updateTransferUI();
   renderCategoryPills(); renderEntries(); renderSummary();
 });
 
@@ -430,7 +502,9 @@ function renderEntries(){
     const row = document.createElement('div'); row.className = 'entry';
     const main = document.createElement('div'); main.className = 'entry-main';
     const title = document.createElement('div'); title.className = 'entry-title'; title.textContent = (entry.description || '').toUpperCase();
-    const meta = document.createElement('div'); meta.className = 'entry-meta'; meta.textContent = `${entry.type} • ${entry.category || 'No category'} • ${entry.payMethod}${entry.paySubType ? (' • ' + entry.paySubType) : ''}`;
+    let metaText = `${entry.type} • ${entry.category || 'No category'} • ${entry.payMethod}${entry.paySubType ? (' • ' + entry.paySubType) : ''}`;
+    if(entry.mappedBank) metaText += ` • ${entry.mappedBank}`;
+    const meta = document.createElement('div'); meta.className = 'entry-meta'; meta.textContent = metaText;
     main.appendChild(title); main.appendChild(meta);
     if(entry.note){ const n = document.createElement('div'); n.className = 'entry-note'; n.textContent = entry.note; main.appendChild(n); }
     if(entry.split && entry.split.enabled){
@@ -440,12 +514,20 @@ function renderEntries(){
       pList.textContent = entry.split.participants.map(p => `${p.name}${p.received ? ' ✓' : ''} (${currencyFmt(p.amount)})`).join(' · ');
       main.appendChild(pList);
     }
+    if(entry.type === 'Transfer' && entry.transfer){
+      const tr = document.createElement('div'); tr.className = 'entry-note'; tr.textContent = `Transfer: ${entry.transfer.from || '-'} → ${entry.transfer.to || '-'}`;
+      main.appendChild(tr);
+    }
 
     const right = document.createElement('div'); right.className = 'entry-right';
-    const amt = document.createElement('div'); amt.className = 'entry-amount ' + (entry.type==='Income' ? 'income' : 'expense'); amt.textContent = (entry.type==='Income'?'+':'-') + currencyFmt(entry.amount);
+    const amt = document.createElement('div'); amt.className = 'entry-amount ' + (entry.type==='Income' ? 'income' : (entry.type==='Transfer' ? '' : 'expense')); amt.textContent = (entry.type==='Income'?'+':'-') + currencyFmt(entry.amount);
     const actions = document.createElement('div'); actions.className = 'entry-actions';
-    const editBtn = document.createElement('button'); editBtn.className = 'btn-small'; editBtn.innerHTML = '✏ Edit'; editBtn.addEventListener('click', ()=> startEdit(dateInput.value, entry));
-    const delBtn = document.createElement('button'); delBtn.className = 'btn-small'; delBtn.innerHTML = '🗑 Delete'; delBtn.addEventListener('click', ()=> { if(confirm('Delete this entry?')) { deleteEntry(dateInput.value, entry.id); }});
+    const editBtn = document.createElement('button'); editBtn.className = 'btn-small';
+    editBtn.innerHTML = `<svg width="16" height="16" aria-hidden="true"><use href="#icon-edit"></use></svg> Edit`;
+    editBtn.addEventListener('click', ()=> startEdit(dateInput.value, entry));
+    const delBtn = document.createElement('button'); delBtn.className = 'btn-small';
+    delBtn.innerHTML = `<svg width="16" height="16" aria-hidden="true"><use href="#icon-delete"></use></svg> Delete`;
+    delBtn.addEventListener('click', ()=> { if(confirm('Delete this entry?')) { deleteEntry(dateInput.value, entry.id); }});
     actions.appendChild(editBtn); actions.appendChild(delBtn);
     right.appendChild(amt); right.appendChild(actions);
 
@@ -460,6 +542,7 @@ function updateDailySummary(entries){
   let exp = 0, inc = 0;
   entries.forEach(e => {
     if(e.type === 'Income') inc += e.amount;
+    else if(e.type === 'Transfer') { /* ignore in totals but show separately if needed */ }
     else exp += e.amount;
   });
   sumExpenseEl.textContent = currencyFmt(exp);
@@ -473,25 +556,36 @@ function startEdit(dateStr, entry){
   showView('entry');
   dateInput.value = dateStr; updateSelectedDateLabel();
   typeEl.value = entry.type || 'Expense';
-  amountEl.value = entry.amount || '';
+  // If split -> prefill total amount (my share + others) and split fields
+  if(entry.split && entry.split.enabled){
+    const others = entry.split.participants.reduce((a,p) => a + (p.amount||0), 0);
+    const total = +( (entry.split.myShare || 0) + others ).toFixed(2);
+    amountEl.value = total;
+    splitNamesInput.value = entry.split.participants.map(p => p.name).join(',');
+    splitAmountsInput.value = entry.split.participants.map(p => p.amount).join(',');
+    myShareInput.value = entry.split.myShare || '';
+    splitModeSelect.value = entry.split.mode || 'custom';
+    if(entry.split.mode === 'equal'){ customSplitsDiv.style.display='none'; myShareWrap.style.display='none'; }
+    else { customSplitsDiv.style.display='block'; myShareWrap.style.display='block'; }
+    isGroupCheckbox.checked = true; splitOptions.style.display='block';
+  } else {
+    amountEl.value = entry.amount || '';
+    isGroupCheckbox.checked = false; splitOptions.style.display='none'; customSplitsDiv.style.display='none'; myShareWrap.style.display='none';
+  }
   descriptionEl.value = entry.description || '';
   categoryEl.value = entry.category || '';
   payMethodSelect.value = entry.payMethod || 'Cash';
   updatePaySubTypeOptions();
   if(entry.paySubType) paySubTypeSelect.value = entry.paySubType;
   noteInput.value = entry.note || '';
-  if(entry.split && entry.split.enabled){
-    isGroupCheckbox.checked = true; splitOptions.style.display='block';
-    splitNamesInput.value = entry.split.participants.map(p => p.name).join(',');
-    if(entry.split.mode === 'equal'){
-      splitModeSelect.value = 'equal'; customSplitsDiv.style.display='none'; myShareWrap.style.display='none';
-    } else {
-      splitModeSelect.value = 'custom'; customSplitsDiv.style.display='block'; myShareWrap.style.display='block';
-      splitAmountsInput.value = entry.split.participants.map(p => p.amount).join(',');
-      myShareInput.value = entry.split.myShare || '';
-    }
+  if(entry.type === 'Transfer' && entry.transfer){
+    // show transfer fields and set the selects
+    payMethodSelect.value = 'Self transfer';
+    updateTransferUI();
+    document.getElementById('transferFrom').value = entry.transfer.from || '';
+    document.getElementById('transferTo').value = entry.transfer.to || '';
   } else {
-    isGroupCheckbox.checked = false; splitOptions.style.display='none'; customSplitsDiv.style.display='none'; myShareWrap.style.display='none';
+    updateTransferUI();
   }
   submitBtn.textContent = 'Update entry';
   statusEl.textContent = 'Editing...';
@@ -510,8 +604,26 @@ function deleteEntry(dateStr, id){
 function initSummaryControls(){
   dateModeSelect.addEventListener('change', ()=>{
     const mode = dateModeSelect.value;
-    monthPickerWrap.style.display = mode === 'month' ? 'block' : 'none';
-    yearPickerWrap.style.display = mode === 'year' ? 'block' : 'none';
+    // remove day picker if present
+    const existing = document.getElementById('dayPickerWrap');
+    if(existing) existing.remove();
+    if(mode === 'month'){
+      monthPickerWrap.style.display = 'block';
+      yearPickerWrap.style.display = 'none';
+    } else if(mode === 'year'){
+      monthPickerWrap.style.display = 'none';
+      yearPickerWrap.style.display = 'block';
+    } else if(mode === 'day'){
+      monthPickerWrap.style.display = 'none';
+      yearPickerWrap.style.display = 'none';
+      // create day picker
+      const wrap = document.createElement('div'); wrap.id = 'dayPickerWrap'; wrap.style.marginTop='8px'; wrap.innerHTML = '<label>Day</label><input id="dayPicker" type="date" />';
+      dateModeSelect.parentElement.parentElement.appendChild(wrap);
+      document.getElementById('dayPicker').addEventListener('change', renderSummary);
+    } else {
+      monthPickerWrap.style.display = 'none';
+      yearPickerWrap.style.display = 'none';
+    }
     renderSummary();
   });
   monthPicker.addEventListener('change', renderSummary);
@@ -520,6 +632,10 @@ function initSummaryControls(){
   filterCategorySelect.addEventListener('change', renderSummary);
   typeFilterSelect.addEventListener('change', renderSummary);
 }
+
+/* get rows per page */
+function getRowsPerPage(){ return parseInt(localStorage.getItem('rows_per_page') || '10', 10); }
+function setRowsPerPage(n){ localStorage.setItem('rows_per_page', String(n)); }
 
 /* get flat array of entries */
 function allEntriesArray(){
@@ -535,9 +651,12 @@ function renderSummary(){
   const mode = dateModeSelect.value;
   const monthVal = monthPicker.value;
   const yearVal = yearPicker.value;
+  const dayVal = document.getElementById('dayPicker') ? document.getElementById('dayPicker').value : null;
+
   let filtered = arr.filter(e => {
     if(mode === 'month' && monthVal) return e.dateStr.startsWith(monthVal);
     if(mode === 'year' && yearVal) return e.dateStr.startsWith(String(yearVal) + '-');
+    if(mode === 'day' && dayVal) return e.dateStr === dayVal;
     return true;
   });
 
@@ -545,6 +664,7 @@ function renderSummary(){
   if(typeF === 'Expense') filtered = filtered.filter(e => !e.split || !e.split.enabled).filter(e => e.type === 'Expense');
   if(typeF === 'Income') filtered = filtered.filter(e => e.type === 'Income');
   if(typeF === 'Split') filtered = filtered.filter(e => e.split && e.split.enabled);
+  if(typeF === 'Transfer') filtered = filtered.filter(e => e.type === 'Transfer');
 
   const payFilter = filterPaymentSelect.value;
   if(payFilter !== 'All') filtered = filtered.filter(e => e.payMethod === payFilter);
@@ -561,14 +681,14 @@ function renderSummary(){
   const categoryTotals = {};
   filtered.forEach(e=>{
     if(e.type === 'Income') totalInc += e.amount;
+    else if(e.type === 'Transfer') { /* ignore in totals */ }
     else totalExp += e.amount;
     if(e.split && e.split.enabled){
-      const othersSum = e.split.participants.reduce((a,p)=>a+p.amount,0);
       const notReceived = e.split.participants.filter(p => !p.received).reduce((a,p)=>a+p.amount,0);
       splitOutstanding += notReceived;
     }
     const cat = e.category || 'Uncategorized';
-    if(e.type !== 'Income') categoryTotals[cat] = (categoryTotals[cat] || 0) + e.amount;
+    if(e.type !== 'Income' && e.type !== 'Transfer') categoryTotals[cat] = (categoryTotals[cat] || 0) + e.amount;
   });
 
   monthSumExpenseEl.textContent = currencyFmt(totalExp);
@@ -621,8 +741,10 @@ function renderHistoryList(entries){
   summaryHistoryEl.innerHTML = '';
   if(!entries.length){ summaryHistoryEl.innerHTML = '<div class="info">No entries for this filter.</div>'; return; }
   const sorted = [...entries].sort((a,b) => a.dateStr === b.dateStr ? b.id - a.id : (a.dateStr < b.dateStr ? 1 : -1));
+  const rows = getRowsPerPage();
+  const paged = sorted.slice(0, rows);
   let cur = null;
-  sorted.forEach(e=>{
+  paged.forEach((e, idx)=>{
     if(e.dateStr !== cur){
       cur = e.dateStr;
       const dl = document.createElement('div'); dl.className = 'summary-history-date'; dl.textContent = formatDateLabel(cur);
@@ -631,8 +753,10 @@ function renderHistoryList(entries){
 
     const row = document.createElement('div'); row.className = 'entry';
     const left = document.createElement('div'); left.className = 'entry-main';
-    const title = document.createElement('div'); title.className = 'entry-title'; title.textContent = e.description;
-    const meta = document.createElement('div'); meta.className = 'entry-meta'; meta.textContent = `${e.type} • ${e.category || 'No category'} • ${e.payMethod}${e.paySubType?(' • '+e.paySubType):''}`;
+    const title = document.createElement('div'); title.className = 'entry-title'; title.textContent = `${(idx+1)}. ${e.description}`;
+    let metaText = `${e.type} • ${e.category || 'No category'} • ${e.payMethod}${e.paySubType?(' • '+e.paySubType):''}`;
+    if(e.mappedBank) metaText += ` • ${e.mappedBank}`;
+    const meta = document.createElement('div'); meta.className = 'entry-meta'; meta.textContent = metaText;
     left.appendChild(title); left.appendChild(meta);
     if(e.note){ const n = document.createElement('div'); n.className = 'entry-note'; n.textContent = e.note; left.appendChild(n); }
 
@@ -641,11 +765,11 @@ function renderHistoryList(entries){
       sp.textContent = `Split: your ${currencyFmt(e.split.myShare)} · to receive ${currencyFmt(e.split.participants.reduce((a,p)=>a+p.amount,0))}`;
       left.appendChild(sp);
 
-      e.split.participants.forEach((p, idx)=>{
+      e.split.participants.forEach((p, pidx)=>{
         const prow = document.createElement('div'); prow.style.display='flex'; prow.style.justifyContent='space-between'; prow.style.alignItems='center'; prow.style.marginTop='6px';
         const pleft = document.createElement('div'); pleft.textContent = `${p.name} — ${currencyFmt(p.amount)}`; pleft.style.color = 'var(--muted)';
         const pright = document.createElement('div'); const cb = document.createElement('input'); cb.type='checkbox'; cb.checked = !!p.received; cb.addEventListener('change', ()=>{
-          toggleSplitReceived(e.id, e.dateStr, idx, cb.checked);
+          toggleSplitReceived(e.id, e.dateStr, pidx, cb.checked);
         });
         pright.appendChild(cb); prow.appendChild(pleft); prow.appendChild(pright); left.appendChild(prow);
       });
@@ -663,9 +787,14 @@ function renderHistoryList(entries){
       left.appendChild(allRow);
     }
 
+    if(e.type === 'Transfer' && e.transfer){
+      const tr = document.createElement('div'); tr.className = 'entry-note'; tr.textContent = `Transfer: ${e.transfer.from || '-'} → ${e.transfer.to || '-'}`;
+      left.appendChild(tr);
+    }
+
     const right = document.createElement('div'); right.className = 'entry-right';
-    const amt = document.createElement('div'); amt.className = 'entry-amount ' + (e.type==='Income' ? 'income' : 'expense'); amt.textContent = (e.type==='Income'?'+':'-') + currencyFmt(e.amount);
-    const edit = document.createElement('button'); edit.className='btn-small'; edit.textContent='✏ Edit'; edit.addEventListener('click', ()=> startEdit(e.dateStr, e));
+    const amt = document.createElement('div'); amt.className = 'entry-amount ' + (e.type==='Income' ? 'income' : (e.type==='Transfer' ? '' : 'expense')); amt.textContent = (e.type==='Income'?'+':'-') + currencyFmt(e.amount);
+    const edit = document.createElement('button'); edit.className='btn-small'; edit.innerHTML = `<svg width="16" height="16" aria-hidden="true"><use href="#icon-edit"></use></svg> Edit`; edit.addEventListener('click', ()=> startEdit(e.dateStr, e));
     right.appendChild(amt); right.appendChild(edit);
 
     row.appendChild(left); row.appendChild(right);
@@ -712,6 +841,42 @@ function renderSettingsUI(){
   accentColorInput.value = custom.accent || DEFAULTS.custom.accent;
   currencySymbolInput.value = custom.currency || DEFAULTS.custom.currency;
   settingCategoriesInput.value = (st.categories||[]).join(',');
+
+  // Mapping area (UPI/Card -> Bank)
+  const mapWrapId = 'paymentBankMapWrap';
+  let mapWrap = document.getElementById(mapWrapId);
+  if(!mapWrap){
+    mapWrap = document.createElement('div'); mapWrap.id = mapWrapId; mapWrap.style.marginTop='12px';
+    mapWrap.innerHTML = `<div class="section-title">Map payment items to banks</div>
+      <div class="info">Assign each UPI app / Card to a Bank so bank balances update automatically (editable).</div>
+      <div id="mapList" style="margin-top:8px; display:flex; flex-direction:column; gap:8px;"></div>`;
+    settingsBanksEl.parentElement.appendChild(mapWrap);
+  }
+  const mapList = document.getElementById('mapList');
+  mapList.innerHTML = '';
+  const s2 = loadStore();
+  const banks = s2.settings.banks || DEFAULTS.settings.banks;
+  const upi = s2.settings.upiApps || [];
+  const cards = s2.settings.cards || [];
+
+  function makeMapRow(label, key, currentBank){
+    const row = document.createElement('div'); row.style.display='flex'; row.style.gap='8px'; row.style.alignItems='center';
+    const lbl = document.createElement('div'); lbl.style.minWidth='160px'; lbl.textContent = label;
+    const sel = document.createElement('select'); banks.forEach(b=> { const o=document.createElement('option'); o.value=b; o.textContent=b; sel.appendChild(o); });
+    const noneOpt = document.createElement('option'); noneOpt.value='__none__'; noneOpt.textContent='None'; sel.appendChild(noneOpt);
+    sel.value = currentBank || '__none__';
+    sel.addEventListener('change', ()=> {
+      const map = s2.paymentBankMap || {};
+      map[key] = sel.value === '__none__' ? null : sel.value;
+      s2.paymentBankMap = map; saveStore(s2);
+      showToast('Mapping saved');
+    });
+    row.appendChild(lbl); row.appendChild(sel);
+    return row;
+  }
+
+  upi.forEach(u => mapList.appendChild(makeMapRow(`UPI: ${u}`, `upi:${u}`, (s2.paymentBankMap && s2.paymentBankMap[`upi:${u}`]) || null)));
+  cards.forEach(c => mapList.appendChild(makeMapRow(`Card: ${c}`, `card:${c}`, (s2.paymentBankMap && s2.paymentBankMap[`card:${c}`]) || null)));
 }
 function makeSettingsPill(text,type){
   const p = document.createElement('div'); p.className = 'settings-pill'; p.textContent = text;
@@ -731,7 +896,7 @@ addCardBtn.addEventListener('click', ()=>{
   const v = newCardInput.value.trim(); if(!v) return; const s = loadStore(); if(!s.settings.cards.includes(v)) s.settings.cards.push(v); saveStore(s); newCardInput.value=''; renderSettingsUI(); updatePaySubTypeOptions();
 });
 addBankBtn.addEventListener('click', ()=>{
-  const v = newBankInput.value.trim(); if(!v) return; const s = loadStore(); if(!s.settings.banks.includes(v)) s.settings.banks.push(v); saveStore(s); newBankInput.value=''; renderSettingsUI(); updatePaySubTypeOptions();
+  const v = newBankInput.value.trim(); if(!v) return; const s = loadStore(); if(!s.settings.banks.includes(v)) s.settings.banks.push(v); saveStore(s); newBankInput.value=''; renderSettingsUI(); renderCategoryPills(); updatePaySubTypeOptions();
 });
 
 saveCustomizationBtn.addEventListener('click', ()=>{
@@ -741,13 +906,13 @@ saveCustomizationBtn.addEventListener('click', ()=>{
   saveCustom(c);
   const cats = (settingCategoriesInput.value || DEFAULTS.settings.categories.join(',')).split(',').map(s => s.trim()).filter(Boolean);
   const s = loadStore(); s.settings.categories = cats; saveStore(s);
-  renderCategoryPills(); renderSettingsUI(); alert('Customization saved.');
+  renderCategoryPills(); renderSettingsUI(); showToast('Customization saved');
 });
 resetCustomizationBtn.addEventListener('click', ()=>{
   localStorage.removeItem(CUSTOM_KEY);
   saveCustom(DEFAULTS.custom);
   const s = loadStore(); s.settings = DEFAULTS.settings; saveStore(s);
-  renderCategoryPills(); renderSettingsUI(); alert('Reset to defaults.');
+  renderCategoryPills(); renderSettingsUI(); showToast('Reset to defaults');
 });
 
 /* USER view */
@@ -769,11 +934,11 @@ changePasswordBtn.addEventListener('click', ()=>{
 function exportCSV(filteredOnly=false, monthFilter=null){
   if(!confirm('Export CSV? This creates a file containing your data.')) return;
   const s = loadStore();
-  const rows = [['date','type','description','category','payMethod','paySubType','amount','note','split']];
+  const rows = [['date','type','description','category','payMethod','paySubType','amount','note','split','transfer']];
   Object.keys(s.days).sort().forEach(dateStr=>{
     if(filteredOnly && monthFilter && !dateStr.startsWith(monthFilter)) return;
     s.days[dateStr].forEach(e=>{
-      rows.push([dateStr,e.type,e.description||'',e.category||'',e.payMethod||'',e.paySubType||'',e.amount||0,e.note||'', e.split?JSON.stringify(e.split):'']);
+      rows.push([dateStr,e.type,e.description||'',e.category||'',e.payMethod||'',e.paySubType||'',e.amount||0,e.note||'', e.split?JSON.stringify(e.split):'', e.transfer?JSON.stringify(e.transfer):'']);
     });
   });
   const csv = rows.map(r=> r.map(cell=> {
@@ -796,26 +961,295 @@ function exportJSON(filteredOnly=false, monthFilter=null){
   const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = 'money_tracker_backup.json'; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
 }
 
-/* ------------- INIT APP ------------- */
-function initApp(){
-  store = loadStore(); custom = loadCustom();
-  applyCustom(); setupTheme(); initNav(); initDatePickers(); renderCategoryPills(); updatePaySubTypeOptions();
-  renderEntries(); initSummaryControls(); renderSettingsUI(); renderUserUI();
+/* ------------- ACCOUNTS & TRANSFERS ------------- */
+// Accounts storage: store.accounts = { 'YYYY-MM': { 'BankName': amount } }
+function setInitialBalanceForBank(month, bank, amount){
+  const s = loadStore();
+  s.accounts = s.accounts || {};
+  s.accounts[month] = s.accounts[month] || {};
+  s.accounts[month][bank] = +amount;
+  saveStore(s);
+}
 
-  payMethodSelect.addEventListener('change', updatePaySubTypeOptions);
+function getBankBalancesForMonth(month){
+  const s = loadStore();
+  const initial = (s.accounts && s.accounts[month]) ? s.accounts[month] : {};
+  const balances = {};
+  Object.keys(initial).forEach(b => balances[b] = initial[b] || 0);
 
-  document.getElementById('exportMenuBtn').addEventListener('click', ()=>{
-    showView('summary');
-    setTimeout(()=> { alert('Use export functions in your console or I can add UI buttons — press Ctrl/Cmd+E for month CSV (choose month first).'); }, 100);
+  Object.keys(s.days || {}).forEach(dateStr => {
+    if(!dateStr.startsWith(month)) return;
+    (s.days[dateStr] || []).forEach(e => {
+      if(e.type === 'Transfer' && e.transfer){
+        const from = e.transfer.from, to = e.transfer.to, amt = +e.amount;
+        if(from) balances[from] = (balances[from] || 0) - amt;
+        if(to) balances[to] = (balances[to] || 0) + amt;
+      } else {
+        // if payment maps to a bank, apply there
+        if(transactionTouchesBank(e, null)){ // returns true and we also use mappedBank field below
+          const bname = e.mappedBank || (e.paySubType && (e.payMethod === 'Bank' || e.payMethod === 'Card') ? e.paySubType : null);
+          if(bname){
+            if(e.type === 'Income') balances[bname] = (balances[bname] || 0) + (+e.amount);
+            else balances[bname] = (balances[bname] || 0) - (+e.amount);
+          }
+        }
+      }
+    });
   });
 
-  document.addEventListener('keydown', (e) => {
-    if((e.ctrlKey || e.metaKey) && e.key === 'e'){ e.preventDefault(); const mon = monthPicker.value; if(!mon){ alert('Pick a month first'); return; } exportCSV(true, mon); }
+  return balances;
+}
+
+function populateAccountsBanks(){
+  const s = loadStore();
+  const banks = s.settings && s.settings.banks ? s.settings.banks : DEFAULTS.settings.banks;
+  accountsBankSelect.innerHTML = '';
+  banks.forEach(b => { const o=document.createElement('option'); o.value=b; o.textContent=b; accountsBankSelect.appendChild(o); });
+}
+function renderBankBalances(){
+  const month = accountsMonthInput.value;
+  bankBalancesList.innerHTML = '';
+  if(!month){ bankBalancesList.innerHTML = '<div class="info">Pick month</div>'; return; }
+  const balances = getBankBalancesForMonth(month);
+  const s = loadStore();
+  const bankList = s.settings && s.settings.banks ? s.settings.banks : [];
+
+  bankList.forEach(b=>{
+    const row = document.createElement('div'); row.className = 'entry';
+    const left = document.createElement('div'); left.className = 'entry-main';
+    left.innerHTML = `<div style="display:flex;align-items:center;gap:10px"><div style="display:flex;align-items:center;gap:8px"><svg width="20" height="20" aria-hidden="true"><use href="#icon-bank"></use></svg><div class="entry-title">${b}</div></div><div class="entry-meta">Initial: ${currencyFmt((s.accounts && s.accounts[month] && s.accounts[month][b])||0)}</div></div>`;
+    const right = document.createElement('div'); right.className = 'entry-right';
+    const amt = document.createElement('div'); amt.className = 'entry-amount'; amt.textContent = currencyFmt(balances[b]||0);
+    const showBtn = document.createElement('button'); showBtn.className = 'bank-action'; showBtn.innerHTML = `<svg width="16" height="16"><use href="#icon-search"></use></svg> Show transactions`;
+    showBtn.addEventListener('click', ()=> openBankTransactionsModal(month, b));
+    right.appendChild(amt); right.appendChild(showBtn); row.appendChild(left); row.appendChild(right); bankBalancesList.appendChild(row);
   });
 }
 
+function openBankTransactionsModal(month, bank){
+  const s = loadStore();
+  // create modal container
+  const modal = document.createElement('div'); modal.className = 'export-modal';
+  const card = document.createElement('div'); card.className = 'export-card';
+  card.style.maxWidth = '820px';
+  card.innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center;">
+      <h3>Transactions — ${bank} • ${month}</h3>
+      <button id="closeBankTx" class="btn-secondary">Close</button>
+    </div>
+    <div style="display:flex;gap:12px;margin-top:10px;flex-wrap:wrap;">
+      <div><label>Type</label><select id="bankTxType"><option value="all">All</option><option value="Expense">Expense</option><option value="Income">Income</option><option value="Transfer">Transfer</option></select></div>
+      <div><label>Payment</label><select id="bankTxPayment"><option value="All">All</option><option>Cash</option><option>UPI</option><option>Card</option><option>Bank</option></select></div>
+      <div><label>Category</label><select id="bankTxCategory"><option value="All">All</option></select></div>
+      <div><label>Day</label><input id="bankTxDay" type="date" /></div>
+      <div style="margin-left:auto;"><button id="bankTxRefresh" class="btn-primary">Refresh</button></div>
+    </div>
+    <div id="bankTxList" style="margin-top:12px; max-height:360px; overflow:auto;"></div>`;
+  modal.appendChild(card); document.body.appendChild(modal);
+
+  document.getElementById('closeBankTx').addEventListener('click', ()=> modal.remove());
+  const typeSel = document.getElementById('bankTxType');
+  const paySel = document.getElementById('bankTxPayment');
+  const catSel = document.getElementById('bankTxCategory');
+  const dayInput = document.getElementById('bankTxDay');
+  const refreshBtn = document.getElementById('bankTxRefresh');
+  const listWrap = document.getElementById('bankTxList');
+
+  // populate categories
+  const cats = new Set();
+  Object.keys(s.days || {}).forEach(d=>{
+    if(!d.startsWith(month)) return;
+    (s.days[d] || []).forEach(e=>{
+      if(transactionTouchesBank(e, bank)){
+        cats.add(e.category || 'Uncategorized');
+      }
+    });
+  });
+  catSel.innerHTML = '<option value="All">All</option>';
+  Array.from(cats).sort().forEach(c => {
+    const o=document.createElement('option'); o.value=c; o.textContent=c; catSel.appendChild(o);
+  });
+
+  function renderBankTxList(){
+    listWrap.innerHTML = '';
+    // gather all transactions in the month that affect the bank (initial included as a row)
+    const rows = [];
+    // initial
+    const init = (s.accounts && s.accounts[month] && s.accounts[month][bank]) ? +s.accounts[month][bank] : null;
+    if(init !== null) rows.push({ date: month + '-01', desc: 'Initial balance', type: 'Init', amount: init, meta: '' });
+    Object.keys(s.days || {}).sort().forEach(d=>{
+      if(!d.startsWith(month)) return;
+      (s.days[d] || []).forEach(e=>{
+        if(transactionTouchesBank(e, bank)){
+          rows.push({ date: d, id: e.id, desc: e.description, type: e.type, amount: e.amount, meta: e.payMethod + (e.paySubType ? ' • '+e.paySubType : '') + (e.transfer ? ` • ${e.transfer.from}->${e.transfer.to}` : ''), entry:e });
+        }
+      });
+    });
+    // apply filters
+    let filtered = rows.slice();
+    if(typeSel.value !== 'all') filtered = filtered.filter(r => r.type === typeSel.value);
+    if(paySel.value !== 'All') filtered = filtered.filter(r => r.meta && r.meta.includes(paySel.value));
+    if(catSel.value !== 'All') filtered = filtered.filter(r => r.entry && (r.entry.category || 'Uncategorized') === catSel.value);
+    if(dayInput.value) filtered = filtered.filter(r => r.date === dayInput.value);
+
+    if(filtered.length === 0){ listWrap.innerHTML = '<div class="info">No transactions</div>'; return; }
+    filtered.forEach((r, idx) => {
+      const row = document.createElement('div'); row.className='entry';
+      const left = document.createElement('div'); left.className='entry-main';
+      const title = document.createElement('div'); title.className='entry-title'; title.textContent = `${formatDateLabel(r.date)} — ${r.desc}`;
+      const meta = document.createElement('div'); meta.className='entry-meta'; meta.textContent = (r.meta || r.type) + (r.entry && r.entry.category ? ' • ' + r.entry.category : '');
+      left.appendChild(title); left.appendChild(meta);
+      const right = document.createElement('div'); right.className='entry-right';
+      const amt = document.createElement('div'); amt.className='entry-amount ' + (r.type === 'Income' ? 'income' : (r.type === 'Init' ? '' : 'expense'));
+      amt.textContent = (r.type==='Income'?'+':'') + currencyFmt(r.amount);
+      right.appendChild(amt);
+      row.appendChild(left); row.appendChild(right);
+      listWrap.appendChild(row);
+    });
+  }
+
+  refreshBtn.addEventListener('click', renderBankTxList);
+  // initial render
+  renderBankTxList();
+}
+
+/* Helper: whether a transaction touches a specific bank (or any bank if bankName null) */
+function transactionTouchesBank(entry, bankName){
+  if(!entry) return false;
+  // if entry type is Transfer and from/to matches
+  if(entry.type === 'Transfer' && entry.transfer){
+    if(!bankName) return true;
+    return entry.transfer.from === bankName || entry.transfer.to === bankName;
+  }
+  // If payMethod maps to bank via paySubType or mapping table
+  if(entry.payMethod === 'Bank' && entry.paySubType) {
+    if(!bankName) return true;
+    if(entry.paySubType === bankName) return true;
+  }
+  if(entry.payMethod === 'Card' && entry.paySubType) {
+    if(!bankName) return true;
+    if(entry.paySubType === bankName) return true;
+  }
+  // mapping table override
+  const s = loadStore();
+  const map = s.paymentBankMap || {};
+  if(entry.payMethod === 'UPI' && entry.paySubType){
+    const m = map[`upi:${entry.paySubType}`];
+    if(!bankName && m) return true;
+    if(m && m === bankName) return true;
+  }
+  if(entry.payMethod === 'Card' && entry.paySubType){
+    const m = map[`card:${entry.paySubType}`];
+    if(!bankName && m) return true;
+    if(m && m === bankName) return true;
+  }
+  // fallback: use paySubType if exact match
+  if(entry.paySubType && bankName && entry.paySubType === bankName) return true;
+  if(entry.mappedBank && bankName && entry.mappedBank === bankName) return true;
+  return false;
+}
+
+/* ------------- INIT APP ------------- */
+function initApp(){
+  custom = loadCustom();
+  applyCustom(); setupTheme(); initNav(); initDatePickers(); renderCategoryPills(); updatePaySubTypeOptions();
+  renderEntries(); initSummaryControls(); renderSettingsUI(); renderUserUI();
+
+  // ensure selects show correct text color on some browsers
+  ensureSelectColors();
+
+  payMethodSelect.addEventListener('change', () => { updatePaySubTypeOptions(); updateTransferUI(); });
+  typeEl.addEventListener('change', updateTransferUI);
+  updateTransferUI();
+
+  // rows per page
+  rowsPerPageSelect.value = localStorage.getItem('rows_per_page') || '10';
+  rowsPerPageSelect.addEventListener('change', ()=>{
+    setRowsPerPage(rowsPerPageSelect.value);
+    renderSummary();
+  });
+
+  // accounts
+  populateAccountsBanks();
+  accountsMonthInput.value = monthPicker.value;
+  accountsMonthInput.addEventListener('change', renderBankBalances);
+  saveInitialBtn.addEventListener('click', ()=>{
+    const month = accountsMonthInput.value;
+    const bank = accountsBankSelect.value;
+    const amount = parseFloat(accountsInitialAmount.value) || 0;
+    if(!month || !bank){ alert('Pick month and bank'); return; }
+    setInitialBalanceForBank(month, bank, amount);
+    showToast('Saved initial balance');
+    renderBankBalances();
+  });
+  renderBankBalances();
+
+  // export modal
+  document.getElementById('summaryExportBtn').addEventListener('click', ()=>{
+    const m = document.createElement('div'); m.className='export-modal';
+    const c = document.createElement('div'); c.className='export-card';
+    c.innerHTML = `<h3>Export / Import</h3>
+      <div style="display:flex;gap:8px;margin-top:8px;">
+        <button id="expCsv" class="btn-primary">Export CSV (month)</button>
+        <button id="expJson" class="btn-secondary">Export JSON (full)</button>
+      </div>
+      <div style="margin-top:12px;">
+        <label>Import JSON backup</label>
+        <input id="importFile" type="file" accept="application/json" />
+      </div>
+      <div style="margin-top:10px; text-align:right;"><button id="closeExport" class="btn-secondary">Close</button></div>`;
+    m.appendChild(c); document.body.appendChild(m);
+    document.getElementById('closeExport').addEventListener('click', ()=> m.remove());
+    document.getElementById('expCsv').addEventListener('click', ()=>{
+      const mon = monthPicker.value;
+      if(!mon){ alert('Pick month first'); return; }
+      exportCSV(true, mon);
+    });
+    document.getElementById('expJson').addEventListener('click', ()=> exportJSON(false,null));
+    document.getElementById('importFile').addEventListener('change', (ev)=>{
+      const f = ev.target.files[0];
+      if(!f) return;
+      const r = new FileReader();
+      r.onload = () => {
+        try{
+          const obj = JSON.parse(r.result);
+          if(confirm('Replace local data with imported data? This will overwrite your current data.')) {
+            saveStore(obj);
+            alert('Imported. Refreshing view.');
+            m.remove();
+            renderEntries(); renderSummary(); renderSettingsUI(); renderBankBalances();
+          }
+        }catch(err){ alert('Invalid JSON'); }
+      };
+      r.readAsText(f);
+    });
+  });
+
+  // export menu quick
+  document.getElementById('exportMenuBtn').addEventListener('click', ()=>{
+    showView('summary');
+    setTimeout(()=> { document.getElementById('summaryExportBtn').click(); }, 100);
+  });
+
+  // keyboard shortcut for month export
+  document.addEventListener('keydown', (e) => {
+    if((e.ctrlKey || e.metaKey) && e.key === 'e'){ e.preventDefault(); const mon = monthPicker.value; if(!mon){ alert('Pick a month first'); return; } exportCSV(true, mon); }
+  });
+
+  // ensure pay subtype & transfer UI are populated
+  updatePaySubTypeOptions(); updateTransferUI();
+}
+
+/* ------------- Small helpers ------------- */
+function showToast(text, short=true){
+  const t = document.createElement('div'); t.className='toast-success';
+  t.innerHTML = `<svg width="16" height="16" aria-hidden="true"><use href="#icon-check"></use></svg><div>${text}</div>`;
+  document.body.appendChild(t);
+  t.style.position = 'fixed'; t.style.right = '18px'; t.style.bottom = '18px'; t.style.zIndex = 99999;
+  setTimeout(()=> { t.style.transition = 'opacity .32s ease'; t.style.opacity = '0'; setTimeout(()=> t.remove(), 320); }, short ? 1500 : 3000);
+}
+
 /* ------------- Helper storage wrappers used inside file ------------- */
-function loadStore(){ return (function(){ try{ const raw = localStorage.getItem(STORAGE_KEY); return raw ? JSON.parse(raw) : { version:1, days:{}, settings: DEFAULTS.settings }; }catch(e){ console.error(e); return { version:1, days:{}, settings: DEFAULTS.settings }; } })(); }
+function loadStore(){ try{ const raw = localStorage.getItem(STORAGE_KEY); return raw ? JSON.parse(raw) : { version:1, days:{}, settings: DEFAULTS.settings, accounts:{}, paymentBankMap:{} }; }catch(e){ console.error(e); return { version:1, days:{}, settings: DEFAULTS.settings, accounts:{}, paymentBankMap:{} }; } }
 function saveStore(s){ localStorage.setItem(STORAGE_KEY, JSON.stringify(s)); }
 function loadUser(){ try{ const r=localStorage.getItem(USER_KEY); return r?JSON.parse(r):null;}catch{return null;} }
 function saveUser(u){ localStorage.setItem(USER_KEY, JSON.stringify(u)); }
