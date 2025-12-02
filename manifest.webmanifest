@@ -1,39 +1,12 @@
 {
   "name": "LUDARP Money Tracker",
   "short_name": "MoneyTracker",
-  "description": "Offline daily expense tracker using local storage, built in LUDARP style.",
   "start_url": "./index.html",
-  "scope": "./",
   "display": "standalone",
-  "orientation": "portrait",
-  "background_color": "#020617",
+  "background_color": "#0f172a",
   "theme_color": "#2563eb",
-  "icons": [
-    {
-      "src": "icons/icon-192.png",
-      "sizes": "192x192",
-      "type": "image/png",
-      "purpose": "any"
-    },
-    {
-      "src": "icons/icon-512.png",
-      "sizes": "512x512",
-      "type": "image/png",
-      "purpose": "any"
-    }
-  ],
-  "shortcuts": [
-    {
-      "name": "Add Today Entry",
-      "short_name": "Add Entry",
-      "description": "Open the app on the entry screen to add today's expense",
-      "url": "./index.html#entry"
-    },
-    {
-      "name": "Open Summary",
-      "short_name": "Summary",
-      "description": "Jump directly to summary & charts",
-      "url": "./index.html#summary"
-    }
+  "icons":[
+    {"src":"icons/icon-192.png","sizes":"192x192","type":"image/png"},
+    {"src":"icons/icon-512.png","sizes":"512x512","type":"image/png"}
   ]
 }

@@ -1,519 +1,326 @@
 'use strict';
 
-/* ================== KEYS & DATA MODEL ================== */
+/* ------------- Keys & defaults ------------- */
+const STORAGE_KEY = 'money_tracker_v3';
+const USER_KEY = 'money_tracker_user_v3';
+const CUSTOM_KEY = 'money_tracker_custom_v3';
 
-const STORAGE_KEY = 'money_tracker_v1';
-const USER_KEY = 'money_tracker_user';
-
-/*
-Store structure:
-
-{
-  version: 1,
-  days: {
-    "2025-12-02": [
-      {
-        id,
-        type: "Expense" | "Income",
-        description,
-        category,
-        payMethod: "Cash" | "UPI" | "Card" | "Bank",
-        paySubType: string,  // e.g. "GPay", "SBI"
-        amount: number,
-        note: string
-      }
-    ],
-    ...
-  },
+const DEFAULTS = {
   settings: {
-    categories: [],
-    upiApps: [],
-    cards: [],
-    banks: []
+    categories: ['Food','Travel','Bills','Shopping','Salary','Other'],
+    upiApps: ['GPay','PhonePe','Paytm'],
+    cards: ['Canara','HDFC','SBI','Credit Card'],
+    banks: ['Canara','HDFC','SBI']
+  },
+  custom: {
+    accent: '#2563eb',
+    currency: '₹'
   }
-}
+};
 
-User structure:
-
-{
-  name: string,
-  password: string  // stored as plain string (for simplicity)
-}
-*/
-
-/* ================== STORAGE HELPERS ================== */
-
-function loadStore() {
-  try {
+/* ------------- Storage helpers ------------- */
+function loadStore(){
+  try{
     const raw = localStorage.getItem(STORAGE_KEY);
-    const base = raw ? JSON.parse(raw) : {};
-    if (!base.version) base.version = 1;
-    if (!base.days) base.days = {};
-    if (!base.settings) {
-      base.settings = {
-        categories: ['Food', 'Travel', 'Bills', 'Shopping', 'Salary', 'Other'],
-        upiApps: ['GPay', 'PhonePe', 'Paytm', 'HDFC UPI', 'SBI UPI'],
-        cards: ['Canara', 'HDFC', 'SBI', 'Credit Card'],
-        banks: ['Canara', 'HDFC', 'SBI']
-      };
-    }
-    return base;
-  } catch (e) {
-    console.error('Error reading storage', e);
-    return {
-      version: 1,
-      days: {},
-      settings: {
-        categories: ['Food', 'Travel', 'Bills', 'Shopping', 'Salary', 'Other'],
-        upiApps: ['GPay', 'PhonePe', 'Paytm', 'HDFC UPI', 'SBI UPI'],
-        cards: ['Canara', 'HDFC', 'SBI', 'Credit Card'],
-        banks: ['Canara', 'HDFC', 'SBI']
-      }
-    };
-  }
+    return raw ? JSON.parse(raw) : { version:1, days:{}, settings: DEFAULTS.settings };
+  }catch(e){ console.error(e); return { version:1, days:{}, settings: DEFAULTS.settings }; }
 }
+function saveStore(store){ localStorage.setItem(STORAGE_KEY, JSON.stringify(store)); }
 
-function saveStore(store) {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(store));
-  } catch (e) {
-    console.error('Error saving storage', e);
-  }
-}
+function loadUser(){ try{ const r=localStorage.getItem(USER_KEY); return r?JSON.parse(r):null;}catch{return null;} }
+function saveUser(u){ localStorage.setItem(USER_KEY, JSON.stringify(u)); }
 
-function getEntriesForDate(store, dateStr) {
-  return store.days[dateStr] || [];
-}
+function loadCustom(){ try{ const r=localStorage.getItem(CUSTOM_KEY); return r?JSON.parse(r):DEFAULTS.custom;}catch{return DEFAULTS.custom;} }
+function saveCustom(c){ localStorage.setItem(CUSTOM_KEY, JSON.stringify(c)); applyCustom(); }
 
-function addEntry(dateStr, entry) {
-  const store = loadStore();
-  if (!store.days[dateStr]) store.days[dateStr] = [];
-  store.days[dateStr].push(entry);
-  saveStore(store);
-}
-
-function updateEntry(oldDateStr, newDateStr, updatedEntry) {
-  const store = loadStore();
-  if (!store.days[oldDateStr]) return;
-
-  store.days[oldDateStr] = store.days[oldDateStr].filter(e => e.id !== updatedEntry.id);
-  if (store.days[oldDateStr].length === 0) delete store.days[oldDateStr];
-
-  if (!store.days[newDateStr]) store.days[newDateStr] = [];
-  store.days[newDateStr].push(updatedEntry);
-
-  saveStore(store);
-}
-
-function deleteEntry(dateStr, id) {
-  const store = loadStore();
-  if (!store.days[dateStr]) return;
-  store.days[dateStr] = store.days[dateStr].filter(e => e.id !== id);
-  if (store.days[dateStr].length === 0) delete store.days[dateStr];
-  saveStore(store);
-}
-
-/* Settings helpers */
-
-function loadSettings() {
-  const store = loadStore();
-  return store.settings;
-}
-
-function saveSettings(settings) {
-  const store = loadStore();
-  store.settings = settings;
-  saveStore(store);
-}
-
-/* User helpers */
-
-function loadUser() {
-  try {
-    const raw = localStorage.getItem(USER_KEY);
-    if (!raw) return null;
-    return JSON.parse(raw);
-  } catch (e) {
-    return null;
-  }
-}
-
-function saveUser(user) {
-  localStorage.setItem(USER_KEY, JSON.stringify(user));
-}
-
-/* Password gate for export */
-
-function checkPasswordGate() {
-  const user = loadUser();
-  if (!user) {
-    alert('No user found. Please create an account first.');
-    return false;
-  }
-  const pw = prompt('Enter your app password to export data:');
-  if (pw === null) return false;
-  if (pw !== user.password) {
-    alert('Incorrect password.');
-    return false;
-  }
-  return true;
-}
-
-/* ================== DOM ELEMENTS ================== */
-
-// Auth
+/* ------------- DOM refs ------------- */
 const authScreen = document.getElementById('authScreen');
-const appRoot = document.getElementById('appRoot');
-const authTitle = document.getElementById('authTitle');
-const authSubtitle = document.getElementById('authSubtitle');
 const authForm = document.getElementById('authForm');
 const authNameRow = document.getElementById('authNameRow');
 const authNameInput = document.getElementById('authName');
 const authPasswordInput = document.getElementById('authPassword');
 const authSubmitBtn = document.getElementById('authSubmitBtn');
+const forgotBtn = document.getElementById('forgotBtn');
+const authHint = document.getElementById('authHint');
 
-// App nav
-const viewEntry = document.getElementById('view-entry');
-const viewSummary = document.getElementById('view-summary');
-const navTabs = document.querySelectorAll('.nav-tab');
+const appRoot = document.getElementById('appRoot');
+const navItems = document.querySelectorAll('.nav-item');
+const mainMenu = document.getElementById('mainMenu');
+const menuToggle = document.getElementById('menuToggle');
+const themeToggleTop = document.getElementById('themeToggleTop');
 
-// Entry view
 const dateInput = document.getElementById('date');
 const selectedDateLabel = document.getElementById('selectedDateLabel');
-const form = document.getElementById('money-form');
-const statusEl = document.getElementById('status');
-const clearBtn = document.getElementById('clear-btn');
-const categoryInput = document.getElementById('category');
-const noteInput = document.getElementById('note');
-const entriesListEl = document.getElementById('entriesList');
 const sumExpenseEl = document.getElementById('sumExpense');
 const sumIncomeEl = document.getElementById('sumIncome');
 const sumNetEl = document.getElementById('sumNet');
-const formTitleEl = document.getElementById('formTitle');
-const submitBtn = document.getElementById('submitBtn');
-const categoryPillsRow = document.getElementById('category-pills');
 
+const form = document.getElementById('money-form');
+const typeEl = document.getElementById('type');
+const amountEl = document.getElementById('amount');
+const descriptionEl = document.getElementById('description');
+const categoryEl = document.getElementById('category');
+const categoryPillsRow = document.getElementById('category-pills');
 const payMethodSelect = document.getElementById('payMethod');
 const paySubTypeWrap = document.getElementById('paySubTypeWrap');
 const paySubTypeLabel = document.getElementById('paySubTypeLabel');
 const paySubTypeSelect = document.getElementById('paySubType');
+const noteInput = document.getElementById('note');
+const submitBtn = document.getElementById('submitBtn');
+const clearBtn = document.getElementById('clear-btn');
+const statusEl = document.getElementById('status');
+const entriesListEl = document.getElementById('entriesList');
 
-// Summary view
+const isGroupCheckbox = document.getElementById('isGroup');
+const splitOptions = document.getElementById('splitOptions');
+const splitNamesInput = document.getElementById('splitNames');
+const splitModeSelect = document.getElementById('splitMode');
+const myShareInput = document.getElementById('myShare');
+const customSplitsDiv = document.getElementById('customSplits');
+const splitAmountsInput = document.getElementById('splitAmounts');
+const myShareWrap = document.getElementById('myShareWrap');
+
 const dateModeSelect = document.getElementById('dateMode');
-const monthPickerWrap = document.getElementById('monthPickerWrap');
-const yearPickerWrap = document.getElementById('yearPickerWrap');
 const monthPicker = document.getElementById('monthPicker');
 const yearPicker = document.getElementById('yearPicker');
-const monthSumExpenseEl = document.getElementById('monthSumExpense');
-const monthSumIncomeEl = document.getElementById('monthSumIncome');
+const monthPickerWrap = document.getElementById('monthPickerWrap');
+const yearPickerWrap = document.getElementById('yearPickerWrap');
 const filterPaymentSelect = document.getElementById('filterPayment');
 const filterCategorySelect = document.getElementById('filterCategory');
+const typeFilterSelect = document.getElementById('typeFilter');
+
 const categoryPieCanvas = document.getElementById('categoryPie');
 const categoryLegendEl = document.getElementById('categoryLegend');
 const summaryHistoryEl = document.getElementById('summaryHistory');
+const monthSumExpenseEl = document.getElementById('monthSumExpense');
+const monthSumIncomeEl = document.getElementById('monthSumIncome');
+const splitOutstandingEl = document.getElementById('splitOutstanding');
 
-// Settings elements
-const settingsCategoriesEl = document.getElementById('settingsCategories');
 const settingsUpiEl = document.getElementById('settingsUpi');
 const settingsCardsEl = document.getElementById('settingsCards');
 const settingsBanksEl = document.getElementById('settingsBanks');
-
-const newCategoryInput = document.getElementById('newCategory');
 const newUpiInput = document.getElementById('newUpi');
-const newCardInput = document.getElementById('newCard');
-const newBankInput = document.getElementById('newBank');
-
-const addCategoryBtn = document.getElementById('addCategoryBtn');
 const addUpiBtn = document.getElementById('addUpiBtn');
+const newCardInput = document.getElementById('newCard');
 const addCardBtn = document.getElementById('addCardBtn');
+const newBankInput = document.getElementById('newBank');
 const addBankBtn = document.getElementById('addBankBtn');
 
-// Backup
-const exportCsvBtn = document.getElementById('exportCsvBtn');
-const exportJsonBtn = document.getElementById('exportJsonBtn');
-const importFileInput = document.getElementById('importFile');
-const importBtn = document.getElementById('importBtn');
+const accentColorInput = document.getElementById('accentColor');
+const currencySymbolInput = document.getElementById('currencySymbol');
+const settingCategoriesInput = document.getElementById('settingCategories');
+const saveCustomizationBtn = document.getElementById('saveCustomization');
+const resetCustomizationBtn = document.getElementById('resetCustomization');
+const themeSelect = document.getElementById('themeSelect');
 
-// Edit state
-let currentEdit = null; // { id, dateStr }
+const userNameField = document.getElementById('userNameField');
+const securityHintInput = document.getElementById('securityHint');
+const biometricEnabledCheckbox = document.getElementById('biometricEnabled');
+const oldPasswordInput = document.getElementById('oldPassword');
+const newPasswordInput = document.getElementById('newPassword');
+const changePasswordBtn = document.getElementById('changePasswordBtn');
+const passwordStatusEl = document.getElementById('passwordStatus');
 
-/* ================== AUTH / LOGIN LOGIC ================== */
+let currentEdit = null;
+let store = loadStore();
+let custom = loadCustom();
 
-function setupAuth() {
+/* ---------- util ---------- */
+function getTZOffsetMs(){ return new Date().getTimezoneOffset()*60000; }
+function todayISO(){ const d=new Date(); return new Date(d - getTZOffsetMs()).toISOString().slice(0,10); }
+function formatDateLabel(dateStr){
+  if(!dateStr) return '';
+  const d = new Date(dateStr + 'T00:00:00');
+  return d.toLocaleDateString(undefined,{day:'2-digit',month:'short',year:'numeric'});
+}
+function currencyFmt(v){ return (custom.currency||'₹') + Number(v).toFixed(2); }
+
+/* ------------- AUTH ------------- */
+function setupAuth(){
   const user = loadUser();
-  if (!user) {
-    // First time: create account
-    authTitle.textContent = 'Create your Money Tracker account';
-    authSubtitle.textContent = 'Choose a password. It\'s used to unlock the app and export data.';
-    authNameRow.style.display = 'block';
-    authSubmitBtn.textContent = 'Create & Enter';
+  if(!user){
+    authNameRow.style.display='block';
+    document.getElementById('authTitle').textContent='Create account';
+    document.getElementById('authSubtitle').textContent='Set a password to secure your data on this device.';
+    authSubmitBtn.textContent='Create & Enter';
   } else {
-    // Existing user: login
-    authTitle.textContent = `Welcome back, ${user.name}`;
-    authSubtitle.textContent = 'Enter your password to unlock LUDARP Money Tracker.';
-    authNameRow.style.display = 'none';
-    authSubmitBtn.textContent = 'Unlock';
+    authNameRow.style.display='none';
+    document.getElementById('authTitle').textContent=`Welcome back, ${user.name||'User'}`;
+    document.getElementById('authSubtitle').textContent='Enter your password to continue.';
+    authSubmitBtn.textContent='Unlock';
+    authHint.textContent = user.securityHint ? `Hint: ${user.securityHint}` : '';
   }
 
-  authForm.addEventListener('submit', e => {
+  authForm.addEventListener('submit', e=>{
     e.preventDefault();
-    const p = authPasswordInput.value.trim();
-    if (!p) {
-      alert('Password is required.');
-      return;
-    }
-
+    const pw = authPasswordInput.value.trim();
+    if(!pw){ alert('Password required'); return; }
     const existing = loadUser();
-    if (!existing) {
+    if(!existing){
       const name = authNameInput.value.trim() || 'User';
-      const newUser = { name, password: p };
-      saveUser(newUser);
+      const u = { name, password: pw, biometricPreferred:false, securityHint:'' };
+      saveUser(u);
       enterApp();
     } else {
-      if (p !== existing.password) {
-        alert('Incorrect password.');
-        return;
-      }
+      if(pw !== existing.password){ alert('Incorrect password'); return; }
       enterApp();
     }
   });
+
+  forgotBtn.addEventListener('click', ()=>{
+    const u = loadUser();
+    if(!u){ alert('No account exists. Create one first.'); return; }
+    const name = prompt('Enter your user name to reset password:');
+    if(!name) return;
+    if(name.trim() !== u.name){ alert('Name does not match. Cannot reset.'); return; }
+    if(u.securityHint){
+      const hintAns = prompt(`Security hint: ${u.securityHint}\nType anything to confirm:`);
+      if(!hintAns){ alert('Reset cancelled'); return; }
+    }
+    const newPw = prompt('Enter a new password (will replace old):');
+    if(!newPw) return;
+    u.password = newPw;
+    saveUser(u);
+    alert('Password reset locally. Please login with new password.');
+  });
 }
 
-function enterApp() {
-  authScreen.style.display = 'none';
-  appRoot.style.display = 'block';
+function enterApp(){
+  authScreen.style.display='none';
+  appRoot.style.display='block';
   initApp();
 }
 
-/* ================== GENERIC HELPERS ================== */
-
-function toLocalDateInputValue(date) {
-  const offsetMs = date.getTimezoneOffset() * 60000;
-  return new Date(date.getTime() - offsetMs).toISOString().slice(0, 10);
+/* ------------- THEME & CUSTOM ------------- */
+function applyCustom(){
+  custom = loadCustom();
+  document.documentElement.style.setProperty('--accent', custom.accent||DEFAULTS.custom.accent);
+  if(accentColorInput) accentColorInput.value = custom.accent || DEFAULTS.custom.accent;
+  if(currencySymbolInput) currencySymbolInput.value = custom.currency || DEFAULTS.custom.currency;
 }
 
-/* ================== INIT APP ================== */
+function setupTheme(){
+  const theme = localStorage.getItem('money_theme') || 'dark';
+  document.body.dataset.theme = theme;
+  themeToggleTop.textContent = theme === 'dark' ? '🌙' : '☀️';
+  themeToggleTop.addEventListener('click', ()=>{
+    const cur = document.body.dataset.theme || 'dark';
+    const next = cur === 'dark' ? 'light' : 'dark';
+    document.body.dataset.theme = next;
+    localStorage.setItem('money_theme', next);
+    themeToggleTop.textContent = next === 'dark' ? '🌙' : '☀️';
+    if(themeSelect) themeSelect.value = next;
+  });
 
-function initApp() {
-  initDate();
-  initSummaryDateControls();
-  initSettingsUI();
-  initNav();
-  initEntryHandlers();
-  initSummaryHandlers();
-  initBackupHandlers();
-
-  // PWA: service worker
-  if ('serviceWorker' in navigator) {
-    window.addEventListener('load', () => {
-      navigator.serviceWorker
-        .register('./sw.js')
-        .catch(err => console.log('SW registration failed', err));
+  if(themeSelect){
+    themeSelect.value = document.body.dataset.theme || 'dark';
+    themeSelect.addEventListener('change', ()=>{
+      const v = themeSelect.value || 'dark';
+      document.body.dataset.theme = v;
+      localStorage.setItem('money_theme', v);
+      themeToggleTop.textContent = v === 'dark' ? '🌙' : '☀️';
     });
   }
 }
 
-/* ================== NAVIGATION ================== */
-
-function initNav() {
-  navTabs.forEach(tab => {
-    tab.addEventListener('click', () => {
-      navTabs.forEach(t => t.classList.remove('active'));
-      tab.classList.add('active');
-      const view = tab.dataset.view;
-      if (view === 'entry') {
-        viewEntry.classList.add('active');
-        viewSummary.classList.remove('active');
-      } else {
-        viewSummary.classList.add('active');
-        viewEntry.classList.remove('active');
-        renderSummary();
-      }
+/* ------------- NAV ------------- */
+function initNav(){
+  navItems.forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      navItems.forEach(b=>b.classList.remove('active'));
+      btn.classList.add('active');
+      const view = btn.dataset.view;
+      showView(view);
+      mainMenu.style.display='none';
+    });
+  });
+  menuToggle.addEventListener('click', e=>{
+    e.stopPropagation();
+    mainMenu.style.display = mainMenu.style.display==='block' ? 'none' : 'block';
+  });
+  document.addEventListener('click', () => { mainMenu.style.display='none'; });
+  mainMenu.querySelectorAll('button').forEach(b=>{
+    b.addEventListener('click', ()=> {
+      const to = b.dataset.to;
+      if(to) showView(to);
+      mainMenu.style.display='none';
     });
   });
 }
 
-/* ================== ENTRY VIEW ================== */
+/* Robust showView implementation */
+function showView(name){
+  document.querySelectorAll('.view').forEach(v=>v.classList.remove('active'));
+  if(!name || name==='entry') document.getElementById('view-entry').classList.add('active');
+  if(name==='summary') document.getElementById('view-summary').classList.add('active');
+  if(name==='settings') document.getElementById('view-settings').classList.add('active');
+  if(name==='user') document.getElementById('view-user').classList.add('active');
+  if(name==='about') document.getElementById('view-about').classList.add('active');
 
-function initDate() {
-  const today = new Date();
-  dateInput.value = toLocalDateInputValue(today);
+  if(mainMenu) mainMenu.style.display='none';
+
+  document.querySelectorAll('.nav-item').forEach(btn => {
+    if(btn.dataset.view === name || (!name && btn.dataset.view === 'entry')) btn.classList.add('active');
+    else btn.classList.remove('active');
+  });
+
+  // view-specific renders
+  try { if(name === 'summary') renderSummary(); } catch(e){}
+  try { if(name === 'entry' || !name) renderEntries(); } catch(e){}
+  try { if(name === 'settings') renderSettingsUI(); } catch(e){}
+  try { if(name === 'user') renderUserUI(); } catch(e){}
+}
+
+/* ------------- DATE & FORM UI ------------- */
+function initDatePickers(){
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = String(now.getMonth()+1).padStart(2,'0');
+  monthPicker.value = `${y}-${m}`;
+  yearPicker.value = y;
+  dateInput.value = new Date(Date.now() - getTZOffsetMs()).toISOString().slice(0,10);
   updateSelectedDateLabel();
-  renderCategoryPills();
-  renderEntries();
-  updatePaySubTypeOptions();
+  dateInput.addEventListener('change', ()=> { updateSelectedDateLabel(); renderEntries(); });
 }
+function getTZOffsetMs(){ return new Date().getTimezoneOffset()*60000; }
+function updateSelectedDateLabel(){ selectedDateLabel.textContent = formatDateLabel(dateInput.value); }
 
-function updateSelectedDateLabel() {
-  const dateStr = dateInput.value;
-  if (!dateStr) {
-    selectedDateLabel.textContent = '';
-    return;
-  }
-  const d = new Date(dateStr + 'T00:00:00');
-  const fmt = d.toLocaleDateString(undefined, {
-    day: '2-digit',
-    month: 'short',
-    year: 'numeric'
-  });
-  selectedDateLabel.textContent = fmt;
-}
-
-function renderCategoryPills() {
-  const settings = loadSettings();
-  categoryPillsRow.innerHTML = '';
-  settings.categories.forEach(cat => {
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = 'pill';
-    btn.dataset.value = cat;
-    btn.textContent = cat;
-    btn.addEventListener('click', () => {
-      categoryInput.value = cat;
-    });
-    categoryPillsRow.appendChild(btn);
+function renderCategoryPills(){
+  const s = loadStore();
+  const cats = s.settings && s.settings.categories ? s.settings.categories : DEFAULTS.settings.categories;
+  categoryPillsRow.innerHTML='';
+  cats.forEach(cat=>{
+    const b = document.createElement('button'); b.type='button'; b.className='pill'; b.textContent=cat;
+    b.addEventListener('click', ()=> { categoryEl.value = cat; });
+    categoryPillsRow.appendChild(b);
   });
 }
 
-function initEntryHandlers() {
-  clearBtn.addEventListener('click', () => {
-    form.reset();
-    statusEl.textContent = '';
-    statusEl.className = 'status';
-    currentEdit = null;
-    formTitleEl.textContent = 'Add entry for this day';
-    submitBtn.textContent = 'Save entry';
-    updatePaySubTypeOptions();
-  });
-
-  dateInput.addEventListener('change', () => {
-    updateSelectedDateLabel();
-    renderEntries();
-  });
-
-  payMethodSelect.addEventListener('change', updatePaySubTypeOptions);
-
-  form.addEventListener('submit', e => {
-    e.preventDefault();
-    statusEl.textContent = 'Saving...';
-    statusEl.className = 'status';
-
-    const newDateStr = dateInput.value;
-    if (!newDateStr) {
-      statusEl.textContent = 'Invalid date.';
-      statusEl.className = 'status error';
-      return;
-    }
-
-    const type = document.getElementById('type').value;
-    const description = document.getElementById('description').value.trim();
-    const category = categoryInput.value.trim();
-    const payMethod = payMethodSelect.value;
-    const paySubType = paySubTypeWrap.style.display === 'none'
-      ? ''
-      : paySubTypeSelect.value === '__custom__'
-        ? ''
-        : paySubTypeSelect.value;
-    const amountVal = parseFloat(document.getElementById('amount').value);
-    const note = noteInput.value.trim();
-
-    if (!description || isNaN(amountVal) || amountVal <= 0) {
-      statusEl.textContent = 'Please enter a description and valid amount.';
-      statusEl.className = 'status error';
-      return;
-    }
-
-    if (currentEdit) {
-      const updatedEntry = {
-        id: currentEdit.id,
-        type,
-        description,
-        category,
-        payMethod,
-        paySubType,
-        amount: amountVal,
-        note
-      };
-      updateEntry(currentEdit.dateStr, newDateStr, updatedEntry);
-      statusEl.textContent = 'Updated ✔';
-      statusEl.className = 'status ok';
-      currentEdit = null;
-      formTitleEl.textContent = 'Add entry for this day';
-      submitBtn.textContent = 'Save entry';
-    } else {
-      const entry = {
-        id: Date.now(),
-        type,
-        description,
-        category,
-        payMethod,
-        paySubType,
-        amount: amountVal,
-        note
-      };
-      addEntry(newDateStr, entry);
-      statusEl.textContent = 'Saved ✔';
-      statusEl.className = 'status ok';
-    }
-
-    form.reset();
-    updatePaySubTypeOptions();
-    renderEntries();
-    renderSummary();
-  });
-}
-
-function updatePaySubTypeOptions() {
-  const settings = loadSettings();
+/* pay subtype */
+function updatePaySubTypeOptions(){
+  const s = loadStore();
   const method = payMethodSelect.value;
-  let list = [];
-  let label = '';
-
-  if (method === 'UPI') {
-    list = settings.upiApps;
-    label = 'UPI app';
-  } else if (method === 'Card') {
-    list = settings.cards;
-    label = 'Card type';
-  } else if (method === 'Bank') {
-    list = settings.banks;
-    label = 'Bank';
-  } else {
-    paySubTypeWrap.style.display = 'none';
-    return;
-  }
-
+  let list = [], label='';
+  if(method==='UPI'){ list = s.settings.upiApps; label='UPI app'; }
+  else if(method==='Card'){ list = s.settings.cards; label='Card'; }
+  else if(method==='Bank'){ list = s.settings.banks; label='Bank'; }
+  else { paySubTypeWrap.style.display='none'; return; }
   paySubTypeLabel.textContent = label;
   paySubTypeSelect.innerHTML = '';
-
-  list.forEach(item => {
-    const opt = document.createElement('option');
-    opt.value = item;
-    opt.textContent = item;
-    paySubTypeSelect.appendChild(opt);
-  });
-
-  // Custom option
-  const customOpt = document.createElement('option');
-  customOpt.value = '__custom__';
-  customOpt.textContent = '+ Custom...';
-  paySubTypeSelect.appendChild(customOpt);
-
-  paySubTypeWrap.style.display = 'block';
-
-  paySubTypeSelect.onchange = () => {
-    if (paySubTypeSelect.value === '__custom__') {
-      const val = prompt(`Enter new ${label.toLowerCase()}:`);
-      if (val && val.trim()) {
-        const trimmed = val.trim();
-        const s = loadSettings();
-        if (method === 'UPI' && !s.upiApps.includes(trimmed)) s.upiApps.push(trimmed);
-        if (method === 'Card' && !s.cards.includes(trimmed)) s.cards.push(trimmed);
-        if (method === 'Bank' && !s.banks.includes(trimmed)) s.banks.push(trimmed);
-        saveSettings(s);
-        initSettingsUI();
-        updatePaySubTypeOptions();
-        paySubTypeSelect.value = trimmed;
+  list.forEach(i=>{ const o=document.createElement('option'); o.value=i; o.textContent=i; paySubTypeSelect.appendChild(o); });
+  const customOpt = document.createElement('option'); customOpt.value='__custom__'; customOpt.textContent = '+ Custom...'; paySubTypeSelect.appendChild(customOpt);
+  paySubTypeWrap.style.display='block';
+  paySubTypeSelect.onchange = ()=>{
+    if(paySubTypeSelect.value === '__custom__'){
+      const val = prompt(`Enter new ${label}:`);
+      if(val && val.trim()){
+        const t = val.trim();
+        const s2 = loadStore();
+        if(method==='UPI' && !s2.settings.upiApps.includes(t)) s2.settings.upiApps.push(t);
+        if(method==='Card' && !s2.settings.cards.includes(t)) s2.settings.cards.push(t);
+        if(method==='Bank' && !s2.settings.banks.includes(t)) s2.settings.banks.push(t);
+        saveStore(s2); renderSettingsUI(); updatePaySubTypeOptions();
+        paySubTypeSelect.value = t;
       } else {
         paySubTypeSelect.value = list[0] || '';
       }
@@ -521,659 +328,499 @@ function updatePaySubTypeOptions() {
   };
 }
 
-function renderEntries() {
+/* split UI behavior */
+isGroupCheckbox.addEventListener('change', ()=> {
+  splitOptions.style.display = isGroupCheckbox.checked ? 'block' : 'none';
+});
+splitModeSelect.addEventListener('change', ()=>{
+  const isCustom = splitModeSelect.value === 'custom';
+  customSplitsDiv.style.display = isCustom ? 'block' : 'none';
+  myShareWrap.style.display = isCustom ? 'block' : 'none';
+});
+
+/* ------------- FORM submit (add/update) ------------- */
+form.addEventListener('submit', (e)=>{
+  e.preventDefault();
   const dateStr = dateInput.value;
-  const store = loadStore();
-  const entries = getEntriesForDate(store, dateStr);
+  if(!dateStr){ statusEl.textContent = 'Choose a date'; return; }
+  const type = typeEl.value;
+  const amount = parseFloat(amountEl.value) || 0;
+  const description = descriptionEl.value.trim();
+  const category = categoryEl.value.trim();
+  const payMethod = payMethodSelect.value;
+  const paySubType = (paySubTypeWrap.style.display==='none') ? '' : (paySubTypeSelect.value==='__custom__' ? '' : paySubTypeSelect.value);
+  const note = noteInput.value.trim();
 
-  entriesListEl.innerHTML = '';
-  if (!entries.length) {
-    entriesListEl.innerHTML = '<div class="info">No entries yet for this day.</div>';
-  } else {
-    entries.forEach(entry => {
-      const div = document.createElement('div');
-      div.className = 'entry';
+  if(!description || !amount){ statusEl.textContent = 'Enter description and amount'; return; }
 
-      const main = document.createElement('div');
-      main.className = 'entry-main';
+  const entry = {
+    id: currentEdit ? currentEdit.id : Date.now(),
+    type, description, category, payMethod, paySubType,
+    amount: 0, note, createdAt: new Date().toISOString(), split: null
+  };
 
-      const title = document.createElement('div');
-      title.className = 'entry-title';
-      title.textContent = entry.description || '(No description)';
+  if(isGroupCheckbox.checked){
+    const participants = splitNamesInput.value.trim() ? splitNamesInput.value.split(',').map(s=>s.trim()).filter(Boolean) : [];
+    if(participants.length === 0){ alert('Provide participants for split'); return; }
 
-      const meta = document.createElement('div');
-      meta.className = 'entry-meta';
-      const sub = entry.paySubType ? ` • ${entry.paySubType}` : '';
-      meta.textContent =
-        `${entry.type} • ${entry.category || 'No category'} • ${entry.payMethod}${sub}`;
-
-      main.appendChild(title);
-      main.appendChild(meta);
-
-      if (entry.note) {
-        const note = document.createElement('div');
-        note.className = 'entry-note';
-        note.textContent = entry.note;
-        main.appendChild(note);
-      }
-
-      const right = document.createElement('div');
-      right.style.display = 'flex';
-      right.style.flexDirection = 'column';
-      right.style.alignItems = 'flex-end';
-      right.style.gap = '0.25rem';
-
-      const amount = document.createElement('div');
-      amount.className =
-        'entry-amount ' + (entry.type === 'Income' ? 'income' : 'expense');
-      const sign = entry.type === 'Income' ? '+' : '-';
-      amount.textContent = `${sign}₹${entry.amount.toFixed(2)}`;
-
-      const buttonsRow = document.createElement('div');
-      buttonsRow.style.display = 'flex';
-      buttonsRow.style.gap = '0.25rem';
-
-      const editBtn = document.createElement('button');
-      editBtn.textContent = 'Edit';
-      editBtn.className = 'btn-small';
-      editBtn.style.border = '1px solid #1e293b';
-      editBtn.style.background = '#0f172a';
-      editBtn.addEventListener('click', () => {
-        startEdit(dateStr, entry);
-      });
-
-      const delBtn = document.createElement('button');
-      delBtn.textContent = 'Delete';
-      delBtn.className = 'btn-small';
-      delBtn.style.border = '1px solid #1e293b';
-      delBtn.style.background = '#020617';
-      delBtn.addEventListener('click', () => {
-        if (confirm('Delete this entry?')) {
-          deleteEntry(dateStr, entry.id);
-          renderEntries();
-          renderSummary();
-        }
-      });
-
-      buttonsRow.appendChild(editBtn);
-      buttonsRow.appendChild(delBtn);
-
-      right.appendChild(amount);
-      right.appendChild(buttonsRow);
-
-      div.appendChild(main);
-      div.appendChild(right);
-      entriesListEl.appendChild(div);
-    });
-  }
-
-  // Daily summary
-  let totalExp = 0;
-  let totalInc = 0;
-  entries.forEach(e => {
-    if (e.type === 'Income') totalInc += e.amount;
-    else totalExp += e.amount;
-  });
-  const net = totalInc - totalExp;
-
-  sumExpenseEl.textContent = '₹' + totalExp.toFixed(2);
-  sumIncomeEl.textContent = '₹' + totalInc.toFixed(2);
-  sumNetEl.textContent = '₹' + net.toFixed(2);
-}
-
-function startEdit(dateStr, entry) {
-  currentEdit = { id: entry.id, dateStr };
-  dateInput.value = dateStr;
-  updateSelectedDateLabel();
-  document.getElementById('type').value = entry.type;
-  document.getElementById('description').value = entry.description;
-  categoryInput.value = entry.category;
-  payMethodSelect.value = entry.payMethod;
-  document.getElementById('amount').value = entry.amount;
-  noteInput.value = entry.note || '';
-  updatePaySubTypeOptions();
-  if (entry.paySubType) {
-    paySubTypeSelect.value = entry.paySubType;
-  }
-
-  formTitleEl.textContent = 'Edit entry';
-  submitBtn.textContent = 'Update entry';
-  statusEl.textContent = 'Editing mode: change values and click Update entry.';
-  statusEl.className = 'status';
-}
-
-/* ================== SUMMARY VIEW & FILTERS ================== */
-
-function initSummaryDateControls() {
-  const today = new Date();
-  const y = today.getFullYear();
-  const m = String(today.getMonth() + 1).padStart(2, '0');
-  monthPicker.value = `${y}-${m}`;
-  yearPicker.value = y;
-
-  dateModeSelect.addEventListener('change', () => {
-    const mode = dateModeSelect.value;
-    if (mode === 'month') {
-      monthPickerWrap.style.display = 'block';
-      yearPickerWrap.style.display = 'none';
-    } else if (mode === 'year') {
-      monthPickerWrap.style.display = 'none';
-      yearPickerWrap.style.display = 'block';
+    if(splitModeSelect.value === 'equal'){
+      const totalPeople = participants.length + 1;
+      const per = +(amount / totalPeople).toFixed(2);
+      const participantsSplit = participants.map(p => ({ name: p, amount: per, received: false }));
+      const myShare = per;
+      entry.amount = myShare;
+      entry.split = { enabled: true, participants: participantsSplit, myShare: myShare, mode: 'equal', status: 'pending' };
     } else {
-      monthPickerWrap.style.display = 'none';
-      yearPickerWrap.style.display = 'none';
+      const raw = splitAmountsInput.value.trim();
+      if(!raw){ alert('Provide custom amounts for participants'); return; }
+      const arr = raw.split(',').map(s => parseFloat(s.trim()) || 0);
+      if(arr.length !== participants.length){ alert('Number of custom amounts must match participants'); return; }
+      const participantsSplit = participants.map((p,i) => ({ name: p, amount: +arr[i].toFixed(2), received: false }));
+      const sumOthers = arr.reduce((a,b)=>a+b,0);
+      const myShare = +(amount - sumOthers).toFixed(2);
+      if(myShare < 0){ alert('Custom amounts exceed total. Fix amounts.'); return; }
+      entry.amount = myShare;
+      entry.split = { enabled: true, participants: participantsSplit, myShare: myShare, mode: 'custom', status: (participantsSplit.every(p=>p.received)?'settled':'pending') };
     }
+  } else {
+    entry.amount = amount;
+  }
+
+  const s = loadStore();
+  if(currentEdit){
+    // remove old
+    const dayArr = s.days[currentEdit.dateStr] || [];
+    const idx = dayArr.findIndex(x => x.id === currentEdit.id);
+    if(idx >= 0){
+      dayArr.splice(idx, 1);
+      if(dayArr.length === 0) delete s.days[currentEdit.dateStr];
+    }
+    if(!s.days[dateStr]) s.days[dateStr] = [];
+    s.days[dateStr].push(entry);
+    saveStore(s);
+    currentEdit = null;
+    submitBtn.textContent = 'Save entry';
+    statusEl.textContent = 'Updated ✓';
+  } else {
+    if(!s.days[dateStr]) s.days[dateStr] = [];
+    s.days[dateStr].push(entry);
+    saveStore(s);
+    statusEl.textContent = 'Saved ✓';
+  }
+
+  form.reset(); splitOptions.style.display='none'; customSplitsDiv.style.display='none'; myShareWrap.style.display='none';
+  renderCategoryPills(); renderEntries(); renderSummary();
+});
+
+/* ------------- Clear handler ------------- */
+clearBtn.addEventListener('click', ()=>{
+  form.reset(); splitOptions.style.display='none'; customSplitsDiv.style.display='none'; myShareWrap.style.display='none';
+  statusEl.textContent = ''; currentEdit = null; submitBtn.textContent = 'Save entry';
+});
+
+/* ------------- Render entries (Entry view) ------------- */
+function renderEntries(){
+  entriesListEl.innerHTML = '';
+  const dateStr = dateInput.value;
+  const s = loadStore();
+  const entries = s.days[dateStr] || [];
+  if(entries.length === 0){ entriesListEl.innerHTML = '<div class="info">No entries for this day.</div>'; updateDailySummary(entries); return; }
+
+  entries.forEach(entry => {
+    const row = document.createElement('div'); row.className = 'entry';
+    const main = document.createElement('div'); main.className = 'entry-main';
+    const title = document.createElement('div'); title.className = 'entry-title'; title.textContent = (entry.description || '').toUpperCase();
+    const meta = document.createElement('div'); meta.className = 'entry-meta'; meta.textContent = `${entry.type} • ${entry.category || 'No category'} • ${entry.payMethod}${entry.paySubType ? (' • ' + entry.paySubType) : ''}`;
+    main.appendChild(title); main.appendChild(meta);
+    if(entry.note){ const n = document.createElement('div'); n.className = 'entry-note'; n.textContent = entry.note; main.appendChild(n); }
+    if(entry.split && entry.split.enabled){
+      const sdiv = document.createElement('div'); sdiv.className = 'entry-note'; sdiv.textContent = `Split: your share ${currencyFmt(entry.split.myShare)}, to receive ${currencyFmt(entry.split.participants.reduce((a,p)=>a+p.amount,0))}`;
+      main.appendChild(sdiv);
+      const pList = document.createElement('div'); pList.className = 'entry-note';
+      pList.textContent = entry.split.participants.map(p => `${p.name}${p.received ? ' ✓' : ''} (${currencyFmt(p.amount)})`).join(' · ');
+      main.appendChild(pList);
+    }
+
+    const right = document.createElement('div'); right.className = 'entry-right';
+    const amt = document.createElement('div'); amt.className = 'entry-amount ' + (entry.type==='Income' ? 'income' : 'expense'); amt.textContent = (entry.type==='Income'?'+':'-') + currencyFmt(entry.amount);
+    const actions = document.createElement('div'); actions.className = 'entry-actions';
+    const editBtn = document.createElement('button'); editBtn.className = 'btn-small'; editBtn.innerHTML = '✏ Edit'; editBtn.addEventListener('click', ()=> startEdit(dateInput.value, entry));
+    const delBtn = document.createElement('button'); delBtn.className = 'btn-small'; delBtn.innerHTML = '🗑 Delete'; delBtn.addEventListener('click', ()=> { if(confirm('Delete this entry?')) { deleteEntry(dateInput.value, entry.id); }});
+    actions.appendChild(editBtn); actions.appendChild(delBtn);
+    right.appendChild(amt); right.appendChild(actions);
+
+    row.appendChild(main); row.appendChild(right);
+    entriesListEl.appendChild(row);
+  });
+
+  updateDailySummary(entries);
+}
+
+function updateDailySummary(entries){
+  let exp = 0, inc = 0;
+  entries.forEach(e => {
+    if(e.type === 'Income') inc += e.amount;
+    else exp += e.amount;
+  });
+  sumExpenseEl.textContent = currencyFmt(exp);
+  sumIncomeEl.textContent = currencyFmt(inc);
+  sumNetEl.textContent = currencyFmt(inc - exp);
+}
+
+/* ------------- Edit & Delete ------------- */
+function startEdit(dateStr, entry){
+  currentEdit = { id: entry.id, dateStr };
+  showView('entry');
+  dateInput.value = dateStr; updateSelectedDateLabel();
+  typeEl.value = entry.type || 'Expense';
+  amountEl.value = entry.amount || '';
+  descriptionEl.value = entry.description || '';
+  categoryEl.value = entry.category || '';
+  payMethodSelect.value = entry.payMethod || 'Cash';
+  updatePaySubTypeOptions();
+  if(entry.paySubType) paySubTypeSelect.value = entry.paySubType;
+  noteInput.value = entry.note || '';
+  if(entry.split && entry.split.enabled){
+    isGroupCheckbox.checked = true; splitOptions.style.display='block';
+    splitNamesInput.value = entry.split.participants.map(p => p.name).join(',');
+    if(entry.split.mode === 'equal'){
+      splitModeSelect.value = 'equal'; customSplitsDiv.style.display='none'; myShareWrap.style.display='none';
+    } else {
+      splitModeSelect.value = 'custom'; customSplitsDiv.style.display='block'; myShareWrap.style.display='block';
+      splitAmountsInput.value = entry.split.participants.map(p => p.amount).join(',');
+      myShareInput.value = entry.split.myShare || '';
+    }
+  } else {
+    isGroupCheckbox.checked = false; splitOptions.style.display='none'; customSplitsDiv.style.display='none'; myShareWrap.style.display='none';
+  }
+  submitBtn.textContent = 'Update entry';
+  statusEl.textContent = 'Editing...';
+}
+
+function deleteEntry(dateStr, id){
+  const s = loadStore();
+  if(!s.days[dateStr]) return;
+  s.days[dateStr] = s.days[dateStr].filter(e => e.id !== id);
+  if(s.days[dateStr].length === 0) delete s.days[dateStr];
+  saveStore(s);
+  renderEntries(); renderSummary();
+}
+
+/* ------------- SUMMARY ------------- */
+function initSummaryControls(){
+  dateModeSelect.addEventListener('change', ()=>{
+    const mode = dateModeSelect.value;
+    monthPickerWrap.style.display = mode === 'month' ? 'block' : 'none';
+    yearPickerWrap.style.display = mode === 'year' ? 'block' : 'none';
     renderSummary();
   });
-
   monthPicker.addEventListener('change', renderSummary);
   yearPicker.addEventListener('change', renderSummary);
-}
-
-function initSummaryHandlers() {
   filterPaymentSelect.addEventListener('change', renderSummary);
   filterCategorySelect.addEventListener('change', renderSummary);
+  typeFilterSelect.addEventListener('change', renderSummary);
 }
 
-function renderSummary() {
-  const store = loadStore();
+/* get flat array of entries */
+function allEntriesArray(){
+  const s = loadStore(); const arr = [];
+  Object.keys(s.days || {}).forEach(d=>{
+    (s.days[d] || []).forEach(e => arr.push({ ...e, dateStr: d }));
+  });
+  return arr;
+}
+
+function renderSummary(){
+  const arr = allEntriesArray();
   const mode = dateModeSelect.value;
-  const monthVal = monthPicker.value; // "YYYY-MM"
-  const yearVal = yearPicker.value;   // "YYYY"
-  const paymentFilter = filterPaymentSelect.value;
-  const categoryFilter = filterCategorySelect.value;
-
-  // Collect all entries with date info
-  let allEntries = [];
-  Object.keys(store.days).forEach(dateStr => {
-    const entries = store.days[dateStr] || [];
-    entries.forEach(e => {
-      allEntries.push({ dateStr, ...e });
-    });
+  const monthVal = monthPicker.value;
+  const yearVal = yearPicker.value;
+  let filtered = arr.filter(e => {
+    if(mode === 'month' && monthVal) return e.dateStr.startsWith(monthVal);
+    if(mode === 'year' && yearVal) return e.dateStr.startsWith(String(yearVal) + '-');
+    return true;
   });
 
-  // Time filter
-  let filtered = allEntries.filter(e => {
-    if (mode === 'month' && monthVal) {
-      return e.dateStr.startsWith(monthVal);
-    } else if (mode === 'year' && yearVal) {
-      return e.dateStr.startsWith(yearVal + '-');
-    } else {
-      return true; // all time
-    }
-  });
+  const typeF = typeFilterSelect.value;
+  if(typeF === 'Expense') filtered = filtered.filter(e => !e.split || !e.split.enabled).filter(e => e.type === 'Expense');
+  if(typeF === 'Income') filtered = filtered.filter(e => e.type === 'Income');
+  if(typeF === 'Split') filtered = filtered.filter(e => e.split && e.split.enabled);
 
-  // Payment filter
-  if (paymentFilter !== 'All') {
-    filtered = filtered.filter(e => e.payMethod === paymentFilter);
-  }
+  const payFilter = filterPaymentSelect.value;
+  if(payFilter !== 'All') filtered = filtered.filter(e => e.payMethod === payFilter);
 
-  // Category options (build from filtered data)
-  const cats = new Set();
-  filtered.forEach(e => {
-    const c = e.category || 'Uncategorized';
-    cats.add(c);
-  });
-
-  // Rebuild category filter options
-  const currentSelected = categoryFilter;
-  filterCategorySelect.innerHTML = '';
-  const allOpt = document.createElement('option');
-  allOpt.value = 'All';
-  allOpt.textContent = 'All';
-  filterCategorySelect.appendChild(allOpt);
+  const cats = new Set(filtered.map(e => e.category || 'Uncategorized'));
+  filterCategorySelect.innerHTML = '<option>All</option>';
   Array.from(cats).sort().forEach(c => {
-    const opt = document.createElement('option');
-    opt.value = c;
-    opt.textContent = c;
-    filterCategorySelect.appendChild(opt);
+    const o = document.createElement('option'); o.value = c; o.textContent = c; filterCategorySelect.appendChild(o);
   });
-  // restore selection if possible
-  if (currentSelected && currentSelected !== 'All') {
-    const found = Array.from(filterCategorySelect.options)
-      .some(o => o.value === currentSelected);
-    if (found) filterCategorySelect.value = currentSelected;
-  }
+  const catNow = filterCategorySelect.value;
+  if(catNow && catNow !== 'All') filtered = filtered.filter(e => (e.category || 'Uncategorized') === catNow);
 
-  const categoryNow = filterCategorySelect.value;
-  if (categoryNow !== 'All') {
-    filtered = filtered.filter(e => (e.category || 'Uncategorized') === categoryNow);
-  }
-
-  // Totals
-  let totalExp = 0;
-  let totalInc = 0;
-  const categoryTotals = {}; // for pie
-
-  filtered.forEach(e => {
-    if (e.type === 'Income') {
-      totalInc += e.amount;
-    } else {
-      totalExp += e.amount;
-      const c = e.category || 'Uncategorized';
-      if (!categoryTotals[c]) categoryTotals[c] = 0;
-      categoryTotals[c] += e.amount;
+  let totalExp = 0, totalInc = 0, splitOutstanding = 0;
+  const categoryTotals = {};
+  filtered.forEach(e=>{
+    if(e.type === 'Income') totalInc += e.amount;
+    else totalExp += e.amount;
+    if(e.split && e.split.enabled){
+      const othersSum = e.split.participants.reduce((a,p)=>a+p.amount,0);
+      const notReceived = e.split.participants.filter(p => !p.received).reduce((a,p)=>a+p.amount,0);
+      splitOutstanding += notReceived;
     }
+    const cat = e.category || 'Uncategorized';
+    if(e.type !== 'Income') categoryTotals[cat] = (categoryTotals[cat] || 0) + e.amount;
   });
 
-  monthSumExpenseEl.textContent = '₹' + totalExp.toFixed(2);
-  monthSumIncomeEl.textContent = '₹' + totalInc.toFixed(2);
+  monthSumExpenseEl.textContent = currencyFmt(totalExp);
+  monthSumIncomeEl.textContent = currencyFmt(totalInc);
+  splitOutstandingEl.textContent = currencyFmt(splitOutstanding);
 
   drawCategoryPie(categoryTotals);
   renderHistoryList(filtered);
 }
 
-function drawCategoryPie(categoryTotals) {
-  const ctx = categoryPieCanvas.getContext('2d');
-  const rect = categoryPieCanvas.getBoundingClientRect();
+/* draw pie */
+function drawCategoryPie(categoryTotals){
+  const canvas = categoryPieCanvas;
+  const ctx = canvas.getContext('2d');
+  const rect = canvas.getBoundingClientRect();
   const dpr = window.devicePixelRatio || 1;
-  const fallbackW = 300;
-  const fallbackH = 220;
-
-  let width = rect.width || fallbackW;
-  let height = rect.height || fallbackH;
-
-  categoryPieCanvas.width = width * dpr;
-  categoryPieCanvas.height = height * dpr;
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-
-  ctx.clearRect(0, 0, width, height);
-
-  const categories = Object.keys(categoryTotals);
-  const total = categories.reduce((sum, cat) => sum + categoryTotals[cat], 0);
-
-  if (!categories.length || total === 0) {
-    ctx.fillStyle = '#9ca3af';
-    ctx.font = '12px system-ui';
-    ctx.fillText('No expense data for this filter.', 10, height / 2);
-    categoryLegendEl.innerHTML = '';
-    return;
-  }
-
+  const w = (rect.width || 300) * dpr, h = (rect.height || 200) * dpr;
+  canvas.width = w; canvas.height = h;
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  const lw = w/dpr, lh = h/dpr;
+  ctx.clearRect(0,0,lw,lh);
+  const cats = Object.keys(categoryTotals);
+  const total = cats.reduce((s,c) => s + categoryTotals[c], 0);
+  if(!cats.length || total===0){ ctx.fillStyle = '#9ca3af'; ctx.font = '12px system-ui'; ctx.fillText('No expense data for this filter.', 10, lh/2); categoryLegendEl.innerHTML = ''; return; }
   const colors = {};
-  categories.forEach((cat, i) => {
-    const hue = (i * 60) % 360;
-    colors[cat] = `hsl(${hue}, 70%, 55%)`;
+  cats.forEach((c,i)=> colors[c] = `hsl(${(i*60)%360} 70% 55%)`);
+  const cx = lw/2, cy = lh/2, radius = Math.min(lw,lh)/2 - 20;
+  let start = -Math.PI/2;
+  cats.forEach(cat=>{
+    const val = categoryTotals[cat];
+    const angle = (val/total) * Math.PI * 2;
+    const end = start + angle;
+    ctx.beginPath(); ctx.moveTo(cx,cy); ctx.arc(cx,cy,radius,start,end); ctx.closePath(); ctx.fillStyle = colors[cat]; ctx.fill();
+    start = end;
   });
-
-  const cx = width / 2;
-  const cy = height / 2;
-  const radius = Math.min(width, height) / 2 - 15;
-
-  let startAngle = -Math.PI / 2;
-
-  categories.forEach(cat => {
-    const value = categoryTotals[cat];
-    const sliceAngle = (value / total) * Math.PI * 2;
-    const endAngle = startAngle + sliceAngle;
-
-    ctx.beginPath();
-    ctx.moveTo(cx, cy);
-    ctx.arc(cx, cy, radius, startAngle, endAngle);
-    ctx.closePath();
-    ctx.fillStyle = colors[cat];
-    ctx.fill();
-
-    startAngle = endAngle;
-  });
-
   categoryLegendEl.innerHTML = '';
-  categories.forEach(cat => {
-    const value = categoryTotals[cat];
-    const percent = (value / total) * 100;
-
-    const item = document.createElement('div');
-    item.className = 'legend-item';
-
-    const left = document.createElement('div');
-    left.className = 'legend-left';
-
-    const colorBox = document.createElement('div');
-    colorBox.className = 'legend-color';
-    colorBox.style.backgroundColor = colors[cat];
-
-    const label = document.createElement('div');
-    label.className = 'legend-label';
-    label.textContent = cat;
-
-    left.appendChild(colorBox);
-    left.appendChild(label);
-
-    const right = document.createElement('div');
-    right.className = 'legend-value';
-    right.textContent = `₹${value.toFixed(0)} (${percent.toFixed(1)}%)`;
-
-    item.appendChild(left);
-    item.appendChild(right);
-    categoryLegendEl.appendChild(item);
+  cats.forEach(cat => {
+    const it = document.createElement('div'); it.className = 'legend-item';
+    const left = document.createElement('div'); left.className = 'legend-left';
+    const col = document.createElement('div'); col.style.width='12px'; col.style.height='12px'; col.style.backgroundColor = colors[cat]; col.style.borderRadius='3px';
+    const lab = document.createElement('div'); lab.textContent = cat; lab.style.marginLeft='8px'; lab.style.color = getComputedStyle(document.body).getPropertyValue('--text');
+    left.appendChild(col); left.appendChild(lab);
+    const right = document.createElement('div'); right.textContent = currencyFmt(categoryTotals[cat]) + ` (${((categoryTotals[cat]/total)*100).toFixed(1)}%)`; right.style.fontWeight='600';
+    it.appendChild(left); it.appendChild(right); categoryLegendEl.appendChild(it);
   });
 }
 
-function renderHistoryList(entries) {
+/* render history list */
+function renderHistoryList(entries){
   summaryHistoryEl.innerHTML = '';
-  if (!entries.length) {
-    summaryHistoryEl.innerHTML = '<div class="info">No entries for this filter.</div>';
-    return;
-  }
-
-  // Sort by date descending, then by id
-  const sorted = [...entries].sort((a, b) => {
-    if (a.dateStr === b.dateStr) return b.id - a.id;
-    return a.dateStr < b.dateStr ? 1 : -1;
-  });
-
-  let currentDate = null;
-  sorted.forEach(e => {
-    if (e.dateStr !== currentDate) {
-      currentDate = e.dateStr;
-      const dLabel = document.createElement('div');
-      dLabel.className = 'summary-history-date';
-      const d = new Date(e.dateStr + 'T00:00:00');
-      const fmt = d.toLocaleDateString(undefined, {
-        day: '2-digit',
-        month: 'short',
-        year: 'numeric'
-      });
-      dLabel.textContent = fmt;
-      summaryHistoryEl.appendChild(dLabel);
+  if(!entries.length){ summaryHistoryEl.innerHTML = '<div class="info">No entries for this filter.</div>'; return; }
+  const sorted = [...entries].sort((a,b) => a.dateStr === b.dateStr ? b.id - a.id : (a.dateStr < b.dateStr ? 1 : -1));
+  let cur = null;
+  sorted.forEach(e=>{
+    if(e.dateStr !== cur){
+      cur = e.dateStr;
+      const dl = document.createElement('div'); dl.className = 'summary-history-date'; dl.textContent = formatDateLabel(cur);
+      summaryHistoryEl.appendChild(dl);
     }
 
-    const row = document.createElement('div');
-    row.className = 'summary-history-entry';
+    const row = document.createElement('div'); row.className = 'entry';
+    const left = document.createElement('div'); left.className = 'entry-main';
+    const title = document.createElement('div'); title.className = 'entry-title'; title.textContent = e.description;
+    const meta = document.createElement('div'); meta.className = 'entry-meta'; meta.textContent = `${e.type} • ${e.category || 'No category'} • ${e.payMethod}${e.paySubType?(' • '+e.paySubType):''}`;
+    left.appendChild(title); left.appendChild(meta);
+    if(e.note){ const n = document.createElement('div'); n.className = 'entry-note'; n.textContent = e.note; left.appendChild(n); }
 
-    const left = document.createElement('div');
-    left.textContent = `${e.description} (${e.category || 'No category'})`;
+    if(e.split && e.split.enabled){
+      const sp = document.createElement('div'); sp.className = 'entry-note';
+      sp.textContent = `Split: your ${currencyFmt(e.split.myShare)} · to receive ${currencyFmt(e.split.participants.reduce((a,p)=>a+p.amount,0))}`;
+      left.appendChild(sp);
 
-    const right = document.createElement('div');
-    const sign = e.type === 'Income' ? '+' : '-';
-    right.textContent = `${sign}₹${e.amount.toFixed(2)}`;
+      e.split.participants.forEach((p, idx)=>{
+        const prow = document.createElement('div'); prow.style.display='flex'; prow.style.justifyContent='space-between'; prow.style.alignItems='center'; prow.style.marginTop='6px';
+        const pleft = document.createElement('div'); pleft.textContent = `${p.name} — ${currencyFmt(p.amount)}`; pleft.style.color = 'var(--muted)';
+        const pright = document.createElement('div'); const cb = document.createElement('input'); cb.type='checkbox'; cb.checked = !!p.received; cb.addEventListener('change', ()=>{
+          toggleSplitReceived(e.id, e.dateStr, idx, cb.checked);
+        });
+        pright.appendChild(cb); prow.appendChild(pleft); prow.appendChild(pright); left.appendChild(prow);
+      });
 
-    row.appendChild(left);
-    row.appendChild(right);
+      const allRow = document.createElement('div'); allRow.style.marginTop='8px';
+      const allChk = document.createElement('input'); allChk.type='checkbox';
+      const allReceived = e.split.participants.every(p => p.received);
+      allChk.checked = allReceived;
+      allChk.addEventListener('change', ()=>{
+        toggleAllSplit(e.id, e.dateStr, allChk.checked);
+      });
+      allRow.appendChild(allChk);
+      const allLbl = document.createElement('span'); allLbl.style.marginLeft='8px'; allLbl.textContent = 'Mark all received';
+      allRow.appendChild(allLbl);
+      left.appendChild(allRow);
+    }
+
+    const right = document.createElement('div'); right.className = 'entry-right';
+    const amt = document.createElement('div'); amt.className = 'entry-amount ' + (e.type==='Income' ? 'income' : 'expense'); amt.textContent = (e.type==='Income'?'+':'-') + currencyFmt(e.amount);
+    const edit = document.createElement('button'); edit.className='btn-small'; edit.textContent='✏ Edit'; edit.addEventListener('click', ()=> startEdit(e.dateStr, e));
+    right.appendChild(amt); right.appendChild(edit);
+
+    row.appendChild(left); row.appendChild(right);
     summaryHistoryEl.appendChild(row);
   });
 }
 
-/* ================== SETTINGS UI ================== */
-
-function initSettingsUI() {
-  const s = loadSettings();
-
-  function renderList(container, arr, type) {
-    container.innerHTML = '';
-    arr.forEach(item => {
-      const pill = document.createElement('div');
-      pill.className = 'settings-pill';
-      pill.textContent = item;
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.textContent = '×';
-      btn.addEventListener('click', () => {
-        const settings = loadSettings();
-        let listRef = [];
-        if (type === 'categories') listRef = settings.categories;
-        if (type === 'upi') listRef = settings.upiApps;
-        if (type === 'cards') listRef = settings.cards;
-        if (type === 'banks') listRef = settings.banks;
-        const idx = listRef.indexOf(item);
-        if (idx >= 0) {
-          listRef.splice(idx, 1);
-          saveSettings(settings);
-          initSettingsUI();
-          renderCategoryPills();
-          updatePaySubTypeOptions();
-          renderSummary();
-        }
-      });
-      pill.appendChild(btn);
-      container.appendChild(pill);
-    });
-  }
-
-  renderList(settingsCategoriesEl, s.categories, 'categories');
-  renderList(settingsUpiEl, s.upiApps, 'upi');
-  renderList(settingsCardsEl, s.cards, 'cards');
-  renderList(settingsBanksEl, s.banks, 'banks');
-
-  addCategoryBtn.onclick = () => {
-    const val = newCategoryInput.value.trim();
-    if (!val) return;
-    const settings = loadSettings();
-    if (!settings.categories.includes(val)) {
-      settings.categories.push(val);
-      saveSettings(settings);
-      newCategoryInput.value = '';
-      initSettingsUI();
-      renderCategoryPills();
-      renderSummary();
-    }
-  };
-
-  addUpiBtn.onclick = () => {
-    const val = newUpiInput.value.trim();
-    if (!val) return;
-    const settings = loadSettings();
-    if (!settings.upiApps.includes(val)) {
-      settings.upiApps.push(val);
-      saveSettings(settings);
-      newUpiInput.value = '';
-      initSettingsUI();
-      updatePaySubTypeOptions();
-    }
-  };
-
-  addCardBtn.onclick = () => {
-    const val = newCardInput.value.trim();
-    if (!val) return;
-    const settings = loadSettings();
-    if (!settings.cards.includes(val)) {
-      settings.cards.push(val);
-      saveSettings(settings);
-      newCardInput.value = '';
-      initSettingsUI();
-      updatePaySubTypeOptions();
-    }
-  };
-
-  addBankBtn.onclick = () => {
-    const val = newBankInput.value.trim();
-    if (!val) return;
-    const settings = loadSettings();
-    if (!settings.banks.includes(val)) {
-      settings.banks.push(val);
-      saveSettings(settings);
-      newBankInput.value = '';
-      initSettingsUI();
-      updatePaySubTypeOptions();
-    }
-  };
+/* toggle one participant received */
+function toggleSplitReceived(entryId, dateStr, participantIdx, checked){
+  const s = loadStore();
+  const day = s.days[dateStr] || [];
+  const idx = day.findIndex(x => x.id === entryId);
+  if(idx < 0) return;
+  const entry = day[idx];
+  if(!entry.split) return;
+  entry.split.participants[participantIdx].received = checked;
+  const allReceived = entry.split.participants.every(p => p.received);
+  entry.split.status = allReceived ? 'settled' : (entry.split.participants.some(p => p.received) ? 'partially' : 'pending');
+  s.days[dateStr][idx] = entry; saveStore(s);
+  renderSummary(); renderEntries();
 }
 
-/* ================== BACKUP / RESTORE ================== */
-
-function escapeCsvField(field) {
-  if (field == null) return '';
-  const s = String(field);
-  if (s.includes('"') || s.includes(',') || s.includes('\n')) {
-    return '"' + s.replace(/"/g, '""') + '"';
-  }
-  return s;
+/* toggle all received */
+function toggleAllSplit(entryId, dateStr, checked){
+  const s = loadStore(); const day = s.days[dateStr] || []; const idx = day.findIndex(x => x.id === entryId); if(idx < 0) return;
+  const entry = day[idx];
+  if(!entry.split) return;
+  entry.split.participants.forEach(p => p.received = checked);
+  entry.split.status = checked ? 'settled' : 'pending';
+  s.days[dateStr][idx] = entry; saveStore(s);
+  renderSummary(); renderEntries();
 }
 
-function initBackupHandlers() {
-  exportCsvBtn.addEventListener('click', () => {
-    if (!checkPasswordGate()) return;
+/* ------------- SETTINGS UI ------------- */
+function renderSettingsUI(){
+  const s = loadStore();
+  const st = s.settings || DEFAULTS.settings;
+  settingsUpiEl.innerHTML=''; settingsCardsEl.innerHTML=''; settingsBanksEl.innerHTML='';
+  st.upiApps.forEach(u => settingsUpiEl.appendChild(makeSettingsPill(u,'upi')));
+  st.cards.forEach(c => settingsCardsEl.appendChild(makeSettingsPill(c,'cards')));
+  st.banks.forEach(b => settingsBanksEl.appendChild(makeSettingsPill(b,'banks')));
 
-    const store = loadStore();
-    const rows = [];
-    rows.push([
-      'date',
-      'type',
-      'description',
-      'category',
-      'payMethod',
-      'paySubType',
-      'amount',
-      'note'
-    ]);
+  custom = loadCustom();
+  accentColorInput.value = custom.accent || DEFAULTS.custom.accent;
+  currencySymbolInput.value = custom.currency || DEFAULTS.custom.currency;
+  settingCategoriesInput.value = (st.categories||[]).join(',');
+}
+function makeSettingsPill(text,type){
+  const p = document.createElement('div'); p.className = 'settings-pill'; p.textContent = text;
+  const btn = document.createElement('button'); btn.textContent = '×'; btn.addEventListener('click', ()=>{
+    const s = loadStore(); let list;
+    if(type==='upi') list = s.settings.upiApps;
+    if(type==='cards') list = s.settings.cards;
+    if(type==='banks') list = s.settings.banks;
+    const idx = list.indexOf(text); if(idx >= 0) list.splice(idx,1); saveStore(s); renderSettingsUI(); updatePaySubTypeOptions();
+  });
+  p.appendChild(btn); return p;
+}
+addUpiBtn.addEventListener('click', ()=>{
+  const v = newUpiInput.value.trim(); if(!v) return; const s = loadStore(); if(!s.settings.upiApps.includes(v)) s.settings.upiApps.push(v); saveStore(s); newUpiInput.value=''; renderSettingsUI(); updatePaySubTypeOptions();
+});
+addCardBtn.addEventListener('click', ()=>{
+  const v = newCardInput.value.trim(); if(!v) return; const s = loadStore(); if(!s.settings.cards.includes(v)) s.settings.cards.push(v); saveStore(s); newCardInput.value=''; renderSettingsUI(); updatePaySubTypeOptions();
+});
+addBankBtn.addEventListener('click', ()=>{
+  const v = newBankInput.value.trim(); if(!v) return; const s = loadStore(); if(!s.settings.banks.includes(v)) s.settings.banks.push(v); saveStore(s); newBankInput.value=''; renderSettingsUI(); updatePaySubTypeOptions();
+});
 
-    Object.keys(store.days).forEach(dateStr => {
-      store.days[dateStr].forEach(e => {
-        rows.push([
-          dateStr,
-          e.type,
-          e.description || '',
-          e.category || '',
-          e.payMethod || '',
-          e.paySubType || '',
-          e.amount,
-          e.note || ''
-        ]);
-      });
+saveCustomizationBtn.addEventListener('click', ()=>{
+  const c = loadCustom();
+  c.accent = accentColorInput.value || c.accent;
+  c.currency = currencySymbolInput.value || c.currency;
+  saveCustom(c);
+  const cats = (settingCategoriesInput.value || DEFAULTS.settings.categories.join(',')).split(',').map(s => s.trim()).filter(Boolean);
+  const s = loadStore(); s.settings.categories = cats; saveStore(s);
+  renderCategoryPills(); renderSettingsUI(); alert('Customization saved.');
+});
+resetCustomizationBtn.addEventListener('click', ()=>{
+  localStorage.removeItem(CUSTOM_KEY);
+  saveCustom(DEFAULTS.custom);
+  const s = loadStore(); s.settings = DEFAULTS.settings; saveStore(s);
+  renderCategoryPills(); renderSettingsUI(); alert('Reset to defaults.');
+});
+
+/* USER view */
+function renderUserUI(){
+  const u = loadUser();
+  if(u){ userNameField.value = u.name || ''; securityHintInput.value = u.securityHint || ''; biometricEnabledCheckbox.checked = !!u.biometricPreferred; }
+}
+changePasswordBtn.addEventListener('click', ()=>{
+  const u = loadUser(); if(!u){ passwordStatusEl.textContent='No user'; passwordStatusEl.style.color='var(--danger)'; return; }
+  const oldPw = oldPasswordInput.value.trim(); const newPw = newPasswordInput.value.trim();
+  if(!oldPw || !newPw){ passwordStatusEl.textContent='Fill both'; passwordStatusEl.style.color='var(--danger)'; return; }
+  if(oldPw !== u.password){ passwordStatusEl.textContent='Incorrect current password'; passwordStatusEl.style.color='var(--danger)'; return; }
+  u.password = newPw; u.name = userNameField.value.trim() || u.name; u.securityHint = securityHintInput.value.trim() || '';
+  u.biometricPreferred = biometricEnabledCheckbox.checked;
+  saveUser(u); passwordStatusEl.textContent='Updated'; passwordStatusEl.style.color='var(--success)';
+});
+
+/* ------------- EXPORT helpers ------------- */
+function exportCSV(filteredOnly=false, monthFilter=null){
+  if(!confirm('Export CSV? This creates a file containing your data.')) return;
+  const s = loadStore();
+  const rows = [['date','type','description','category','payMethod','paySubType','amount','note','split']];
+  Object.keys(s.days).sort().forEach(dateStr=>{
+    if(filteredOnly && monthFilter && !dateStr.startsWith(monthFilter)) return;
+    s.days[dateStr].forEach(e=>{
+      rows.push([dateStr,e.type,e.description||'',e.category||'',e.payMethod||'',e.paySubType||'',e.amount||0,e.note||'', e.split?JSON.stringify(e.split):'']);
     });
+  });
+  const csv = rows.map(r=> r.map(cell=> {
+    if(cell==null) return '';
+    const s = String(cell).replace(/"/g,'""');
+    return /,|\n|"/.test(s) ? `"${s}"` : s;
+  }).join(',')).join('\n');
+  const blob = new Blob([csv],{type:'text/csv'});
+  const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = 'money_tracker_export.csv'; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+}
+function exportJSON(filteredOnly=false, monthFilter=null){
+  const s = loadStore();
+  let out = {...s};
+  if(filteredOnly && monthFilter){
+    const days = {};
+    Object.keys(s.days).forEach(k=>{ if(k.startsWith(monthFilter)) days[k]=s.days[k]; });
+    out.days = days;
+  }
+  const blob = new Blob([JSON.stringify(out,null,2)],{type:'application/json'});
+  const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = 'money_tracker_backup.json'; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+}
 
-    const csvLines = rows.map(r => r.map(escapeCsvField).join(',')).join('\n');
-    const blob = new Blob([csvLines], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'money_tracker_backup.csv';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+/* ------------- INIT APP ------------- */
+function initApp(){
+  store = loadStore(); custom = loadCustom();
+  applyCustom(); setupTheme(); initNav(); initDatePickers(); renderCategoryPills(); updatePaySubTypeOptions();
+  renderEntries(); initSummaryControls(); renderSettingsUI(); renderUserUI();
+
+  payMethodSelect.addEventListener('change', updatePaySubTypeOptions);
+
+  document.getElementById('exportMenuBtn').addEventListener('click', ()=>{
+    showView('summary');
+    setTimeout(()=> { alert('Use export functions in your console or I can add UI buttons — press Ctrl/Cmd+E for month CSV (choose month first).'); }, 100);
   });
 
-  exportJsonBtn.addEventListener('click', () => {
-    if (!checkPasswordGate()) return;
-
-    const store = loadStore();
-    const blob = new Blob([JSON.stringify(store, null, 2)], {
-      type: 'application/json'
-    });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'money_tracker_backup.json';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-  });
-
-  importBtn.addEventListener('click', () => {
-    const file = importFileInput.files[0];
-    if (!file) {
-      alert('Choose a CSV or JSON file first.');
-      return;
-    }
-
-    const reader = new FileReader();
-    reader.onload = e => {
-      const text = e.target.result;
-      try {
-        let newStore;
-        if (
-          file.name.toLowerCase().endsWith('.json') ||
-          text.trim().startsWith('{')
-        ) {
-          newStore = JSON.parse(text);
-          if (!newStore.days) throw new Error('Invalid JSON backup');
-        } else {
-          // CSV import
-          const lines = text.split(/\r?\n/).filter(l => l.trim().length > 0);
-          const header = parseCsvLine(lines[0]);
-          const idx = {
-            date: header.indexOf('date'),
-            type: header.indexOf('type'),
-            description: header.indexOf('description'),
-            category: header.indexOf('category'),
-            payMethod: header.indexOf('payMethod'),
-            paySubType: header.indexOf('paySubType'),
-            amount: header.indexOf('amount'),
-            note: header.indexOf('note')
-          };
-          if (idx.date < 0 || idx.type < 0 || idx.amount < 0) {
-            throw new Error('CSV missing required columns');
-          }
-          newStore = {
-            version: 1,
-            days: {},
-            settings: loadSettings()
-          };
-          for (let i = 1; i < lines.length; i++) {
-            const cols = parseCsvLine(lines[i]);
-            if (!cols || cols.length === 0) continue;
-            const dateStr = cols[idx.date];
-            if (!dateStr) continue;
-            const type = cols[idx.type] || 'Expense';
-            const description = cols[idx.description] || '';
-            const category = cols[idx.category] || '';
-            const payMethod = cols[idx.payMethod] || '';
-            const paySubType =
-              idx.paySubType >= 0 ? cols[idx.paySubType] || '' : '';
-            const amount = parseFloat(cols[idx.amount] || '0');
-            const note = idx.note >= 0 ? cols[idx.note] || '' : '';
-            if (isNaN(amount) || amount <= 0) continue;
-
-            if (!newStore.days[dateStr]) newStore.days[dateStr] = [];
-            newStore.days[dateStr].push({
-              id: Date.now() + i,
-              type,
-              description,
-              category,
-              payMethod,
-              paySubType,
-              amount,
-              note
-            });
-          }
-        }
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(newStore));
-        alert('Import successful.');
-        renderEntries();
-        renderSummary();
-      } catch (err) {
-        console.error(err);
-        alert('Import failed: ' + err.message);
-      }
-    };
-    reader.readAsText(file);
+  document.addEventListener('keydown', (e) => {
+    if((e.ctrlKey || e.metaKey) && e.key === 'e'){ e.preventDefault(); const mon = monthPicker.value; if(!mon){ alert('Pick a month first'); return; } exportCSV(true, mon); }
   });
 }
 
-function parseCsvLine(line) {
-  const result = [];
-  let current = '';
-  let inQuotes = false;
-  for (let i = 0; i < line.length; i++) {
-    const ch = line[i];
-    if (inQuotes) {
-      if (ch === '"') {
-        if (i + 1 < line.length && line[i + 1] === '"') {
-          current += '"';
-          i++;
-        } else {
-          inQuotes = false;
-        }
-      } else {
-        current += ch;
-      }
-    } else {
-      if (ch === '"') {
-        inQuotes = true;
-      } else if (ch === ',') {
-        result.push(current);
-        current = '';
-      } else {
-        current += ch;
-      }
-    }
-  }
-  result.push(current);
-  return result;
-}
+/* ------------- Helper storage wrappers used inside file ------------- */
+function loadStore(){ return (function(){ try{ const raw = localStorage.getItem(STORAGE_KEY); return raw ? JSON.parse(raw) : { version:1, days:{}, settings: DEFAULTS.settings }; }catch(e){ console.error(e); return { version:1, days:{}, settings: DEFAULTS.settings }; } })(); }
+function saveStore(s){ localStorage.setItem(STORAGE_KEY, JSON.stringify(s)); }
+function loadUser(){ try{ const r=localStorage.getItem(USER_KEY); return r?JSON.parse(r):null;}catch{return null;} }
+function saveUser(u){ localStorage.setItem(USER_KEY, JSON.stringify(u)); }
+function loadCustom(){ try{ const r=localStorage.getItem(CUSTOM_KEY); return r?JSON.parse(r):DEFAULTS.custom;}catch{return DEFAULTS.custom;} }
+function saveCustom(c){ localStorage.setItem(CUSTOM_KEY, JSON.stringify(c)); applyCustom(); }
 
-/* ================== STARTUP ================== */
-
+/* ------------- Start ------------- */
 setupAuth();
