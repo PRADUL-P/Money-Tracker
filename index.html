@@ -7,6 +7,8 @@
   <meta name="theme-color" content="#2563eb" />
   <link rel="manifest" href="manifest.webmanifest" />
   <link rel="stylesheet" href="style.css" />
+  <!-- SheetJS for Excel export/import -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 
   <!-- SVG sprite for icons -->
   <svg xmlns="http://www.w3.org/2000/svg" style="display:none;">
@@ -17,6 +19,7 @@
     <symbol id="icon-bank" viewBox="0 0 24 24"><path fill="currentColor" d="M12 3 1 9h3v8h16V9h3L12 3zM7 14v-3h10v3H7z"/></symbol>
     <symbol id="icon-search" viewBox="0 0 24 24"><path fill="currentColor" d="M15.5 14h-.79l-.28-.27A6.471 6.471 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79L20 20.49 21.49 19 15.5 14z"/></symbol>
     <symbol id="icon-check" viewBox="0 0 24 24"><path fill="currentColor" d="M9 16.2 4.8 12l-1.4 1.4L9 19 21 7l-1.4-1.4z"/></symbol>
+    <symbol id="icon-clear" viewBox="0 0 24 24"><path fill="currentColor" d="M18.3 5.71 12 12l6.3 6.29-1.42 1.42L10.59 13.41 4.29 19.71 2.87 18.29 9.17 12 2.87 5.71 4.29 4.29 10.59 10.59 16.88 4.29z"/></symbol>
   </svg>
 </head>
 <body>
@@ -49,11 +52,22 @@
 
   <!-- APP -->
   <div id="appRoot" class="appRoot" style="display:none;">
-    <header class="app-header card">
+    <header class="app-header card" role="banner">
+      <!-- UPDATED HEADER: brand icon separated from title -->
       <div class="header-top">
-        <div>
-          <h1>LUDARP Money Tracker</h1>
-          <p class="subtitle">Offline daily tracker — secure on your device</p>
+        <div class="brand-left">
+          <div class="brand-icon" role="img" aria-label="LUDARP logo">
+            <!-- Simple SVG logo. Replace with image/logo if you have one -->
+            <svg width="44" height="44" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg" role="img" aria-hidden="true">
+              <circle cx="24" cy="24" r="22" fill="var(--accent)"></circle>
+              <text x="24" y="30" text-anchor="middle" font-size="16" font-family="system-ui, sans-serif" fill="#fff" font-weight="700">L</text>
+            </svg>
+          </div>
+
+          <div class="brand-text">
+            <h1 class="brand-title">LUDARP Money Tracker</h1>
+            <p class="subtitle brand-sub">Offline daily tracker — secure on your device</p>
+          </div>
         </div>
 
         <div class="header-actions">
@@ -68,23 +82,21 @@
         <button class="nav-item active" data-view="entry">Entry</button>
         <button class="nav-item" data-view="summary">Summary</button>
         <button class="nav-item" data-view="accounts">Accounts</button>
-        <!-- <button class="nav-item" data-view="settings">Settings</button>
+        <button class="nav-item" data-view="settings">Settings</button>
         <button class="nav-item" data-view="user">User</button>
-        <button class="nav-item" data-view="about">About</button> -->
+        <button class="nav-item" data-view="about">About</button>
       </nav>
 
-      <div id="mainMenu" class="menu-panel">
+      <div id="mainMenu" class="menu-panel" aria-hidden="true">
         <button data-to="user">User Info</button>
         <button data-to="settings">Settings</button>
         <button data-to="about">About</button>
         <button data-to="entry">Home</button>
         <button data-to="summary">Summary</button>
         <button data-to="accounts">Accounts</button>
-        
-        
-        
-         
         <button id="exportMenuBtn" data-to="backup">Export/Backup</button>
+        <hr style="opacity:.06;margin:8px 0" />
+        <button id="clearAppDataBtn" class="btn-secondary">Clear all (Export first)</button>
       </div>
     </header>
 
@@ -410,6 +422,18 @@
               <button id="addBankBtn" class="btn-secondary">Add</button>
             </div>
           </div>
+
+          <!-- NEW: Export / Import in Settings -->
+          <div style="margin-top:12px;">
+            <div class="section-title">Export & Import</div>
+            <div class="info">Export app data from here too (CSV/JSON/XLSX). Import accepts JSON or XLSX backups with same columns.</div>
+            <div style="display:flex; gap:8px; margin-top:8px; flex-wrap:wrap;">
+              <button id="settingsExpCsv" class="btn-primary">Export CSV (month)</button>
+              <button id="settingsExpJson" class="btn-secondary">Export JSON (full)</button>
+              <button id="settingsExpXlsx" class="btn-secondary">Export Excel (.xlsx)</button>
+              <input id="settingsImportFile" type="file" accept=".json,.xlsx,.xls,.csv" />
+            </div>
+          </div>
         </section>
       </section>
 
@@ -449,7 +473,7 @@
           <p class="info">
             This app keeps all data locally in your browser. It is a PWA-ready offline tracker with split/group support and customizable settings.
           </p>
-          <p class="info small">Version: 1.0 • Offline only • No external servers</p>
+          <p class="info small">Version: 1.0 • Offline only • No external servers (except optional library CDN for Excel)</p>
         </section>
       </section>
     </main>

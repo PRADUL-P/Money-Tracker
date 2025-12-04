@@ -46,9 +46,10 @@ const authHint = document.getElementById('authHint');
 
 const appRoot = document.getElementById('appRoot');
 const navItems = document.querySelectorAll('.nav-item');
-const mainMenu = document.getElementById('mainMenu');
-const menuToggle = document.getElementById('menuToggle');
+let mainMenu = document.getElementById('mainMenu'); // will be reparented to body
+let menuToggle = document.getElementById('menuToggle'); // will be reparented to body
 const themeToggleTop = document.getElementById('themeToggleTop');
+const headerTop = document.querySelector('.header-top');
 
 const dateInput = document.getElementById('date');
 const selectedDateLabel = document.getElementById('selectedDateLabel');
@@ -131,6 +132,14 @@ const accountsInitialAmount = document.getElementById('accountsInitialAmount');
 const saveInitialBtn = document.getElementById('saveInitialBtn');
 const bankBalancesList = document.getElementById('bankBalancesList');
 
+const exportMenuBtn = document.getElementById('exportMenuBtn');
+const clearAppDataBtn = document.getElementById('clearAppDataBtn');
+
+const settingsExpCsvBtn = document.getElementById('settingsExpCsv');
+const settingsExpJsonBtn = document.getElementById('settingsExpJson');
+const settingsExpXlsxBtn = document.getElementById('settingsExpXlsx');
+const settingsImportFileInput = document.getElementById('settingsImportFile');
+
 let currentEdit = null;
 let custom = loadCustom();
 
@@ -212,8 +221,8 @@ function applyCustom(){
 function setupTheme(){
   const theme = localStorage.getItem('money_theme') || 'dark';
   document.body.dataset.theme = theme;
-  themeToggleTop.textContent = theme === 'dark' ? '🌙' : '☀️';
-  themeToggleTop.addEventListener('click', ()=>{
+  if(themeToggleTop) themeToggleTop.textContent = theme === 'dark' ? '🌙' : '☀️';
+  themeToggleTop && themeToggleTop.addEventListener('click', ()=>{
     const cur = document.body.dataset.theme || 'dark';
     const next = cur === 'dark' ? 'light' : 'dark';
     document.body.dataset.theme = next;
@@ -233,45 +242,207 @@ function setupTheme(){
   }
 }
 
-/* ------------- NAV ------------- */
+/* ------------- NAV & menu placement changes ------------- */
+
+/*
+  Important changes:
+  - Move the menu toggle and the main menu element to document.body so they won't be clipped by any parent containers (carousel, header card etc)
+  - Position the menu toggle in fixed coords aligned with header and keep it visible (z-index)
+  - The main menu is a fixed element; positionMainMenu computes top based on header rect and places menu below header
+  - Pointer-events toggled off when menu closed to avoid invisible overlay preventing clicks
+*/
+
+function ensureMenuElementsInBody(){
+  // Try to reparent mainMenu and menuToggle into document.body to avoid container clipping
+  try {
+    if(!mainMenu) mainMenu = document.getElementById('mainMenu');
+    if(!menuToggle) menuToggle = document.getElementById('menuToggle');
+
+    if(mainMenu && mainMenu.parentElement !== document.body){
+      document.body.appendChild(mainMenu);
+      // ensure style basics
+      mainMenu.style.position = 'fixed';
+      mainMenu.style.zIndex = 99999;
+      mainMenu.style.pointerEvents = 'none';
+    }
+
+    if(menuToggle && menuToggle.parentElement !== document.body){
+      // preserve existing event listeners by cloning node content into a new button wrapper
+      const rect = menuToggle.getBoundingClientRect();
+      // Move original element to body; some CSS may rely on it, so try to keep class/id
+      document.body.appendChild(menuToggle);
+      menuToggle.style.position = 'fixed';
+      menuToggle.style.zIndex = 100000;
+      menuToggle.style.background = 'transparent';
+      menuToggle.style.border = 'none';
+      menuToggle.style.pointerEvents = 'auto';
+      // initial placement
+      positionMenuToggle();
+    }
+  } catch(e){
+    console.warn('Menu reparent failed', e);
+  }
+}
+
+function positionMenuToggle(){
+  try {
+    if(!menuToggle) return;
+    const headerRect = headerTop ? headerTop.getBoundingClientRect() : { top: 12, right: window.innerWidth - 12, height: 56 };
+    // Place button slightly inside header top-left corner area (but fixed so not inside header DOM)
+    const top = Math.max(8, headerRect.top + 8); // px from viewport top
+    const right = Math.max(8, window.innerWidth - (headerRect.right - 12)); // region aligned to header right
+    // If headerRect.right is 0 or not available, place at top-right
+    const fallbackRight = 18;
+    // Compute a final right coordinate in px from viewport right
+    // Simpler: place near top-right corner with offset if header exists
+    let finalRight = 18;
+    if(headerTop){
+      // use headerRect.right as anchor
+      finalRight = Math.max(12, window.innerWidth - (headerRect.right - 18));
+    }
+    // set styles
+    menuToggle.style.top = `${top}px`;
+    menuToggle.style.right = `${finalRight}px`;
+    menuToggle.style.left = 'auto';
+    menuToggle.style.boxShadow = 'none';
+    menuToggle.style.transform = 'none';
+  } catch(e){
+    // fallback
+    menuToggle.style.top = '12px';
+    menuToggle.style.right = '18px';
+    menuToggle.style.left = 'auto';
+  }
+}
+
 function initNav(){
+  ensureMenuElementsInBody();
+
   navItems.forEach(btn=>{
     btn.addEventListener('click', ()=>{
       navItems.forEach(b=>b.classList.remove('active'));
       btn.classList.add('active');
       const view = btn.dataset.view;
       showView(view);
-      mainMenu.style.display='none';
+      closeMainMenu();
     });
   });
 
-  menuToggle.addEventListener('click', e=>{
-    e.stopPropagation();
-    const isOpen = mainMenu.classList.toggle('open');
-    mainMenu.style.display = isOpen ? 'block' : 'none';
+  // safe toggle binding: remove old handlers (if any) then add new
+  if(menuToggle){
+    // Remove duplicate listeners by replacing with a small wrapper
+    const newToggle = menuToggle.cloneNode(true);
+    menuToggle.parentElement.replaceChild(newToggle, menuToggle);
+    menuToggle = newToggle;
+    menuToggle.addEventListener('click', e=>{
+      e.stopPropagation();
+      const isOpen = mainMenu.classList.toggle('open');
+      if(isOpen) openMainMenu(); else closeMainMenu();
+    });
+  }
+
+  // ensure mainMenu exists and listen to clicks inside it
+  if(mainMenu){
+    mainMenu.addEventListener('click', e => e.stopPropagation());
+    // ensure it is a direct child of body (to avoid clip/overflow hidden)
+    if(mainMenu.parentElement !== document.body) document.body.appendChild(mainMenu);
+    // default to hidden
+    mainMenu.style.display = 'none';
+    mainMenu.style.pointerEvents = 'none';
+    mainMenu.style.zIndex = 99999;
+    mainMenu.setAttribute('aria-hidden', 'true');
+  }
+
+  // document click: close only when click outside menu, outside toggle and outside nav-item
+  document.addEventListener('click', (e) => {
+    try {
+      const target = e.target;
+      if(mainMenu && mainMenu.classList.contains('open')) {
+        const clickedInsideMenu = mainMenu.contains(target);
+        const clickedToggle = menuToggle && (menuToggle.contains(target) || menuToggle === target);
+        const clickedNavItem = !!target.closest?.('.nav-item');
+        if(!clickedInsideMenu && !clickedToggle && !clickedNavItem){
+          closeMainMenu();
+        }
+      }
+    } catch(err){
+      if(mainMenu && mainMenu.classList.contains('open')) closeMainMenu();
+    }
   });
 
-  mainMenu.addEventListener('click', e => e.stopPropagation());
-  document.addEventListener('click', () => { mainMenu.classList.remove('open'); mainMenu.style.display='none'; });
-
-  mainMenu.querySelectorAll('button').forEach(b=>{
+  // wire menu internal buttons (if any have data-to)
+  if(mainMenu) mainMenu.querySelectorAll('button[data-to]').forEach(b=>{
     b.addEventListener('click', ()=> {
       const to = b.dataset.to;
       if(to) showView(to);
-      mainMenu.style.display='none';
+      closeMainMenu();
     });
   });
+
+  // keep menu positioning aligned on resize/scroll
+  window.addEventListener('resize', ()=> { positionMenuToggle(); if(mainMenu.classList.contains('open')) positionMainMenu(); });
+  window.addEventListener('scroll', ()=> { positionMenuToggle(); if(mainMenu.classList.contains('open')) positionMainMenu(); });
+}
+
+/* open/close functions for menu (mainMenu is fixed on body) */
+function openMainMenu(){
+  if(!mainMenu) return;
+  mainMenu.classList.add('open');
+  mainMenu.style.display = 'block';
+  mainMenu.setAttribute('aria-hidden', 'false');
+  mainMenu.style.pointerEvents = 'auto';
+  positionMainMenu();
+}
+
+function closeMainMenu(){
+  if(!mainMenu) return;
+  mainMenu.classList.remove('open');
+  mainMenu.style.display = 'none';
+  mainMenu.setAttribute('aria-hidden', 'true');
+  // prevent it from intercepting events while hidden
+  mainMenu.style.pointerEvents = 'none';
+}
+
+/* Robust menu position so it won't clip under browser chrome */
+function positionMainMenu(){
+  try{
+    if(!mainMenu) return;
+    const headerRect = headerTop ? headerTop.getBoundingClientRect() : { bottom: 64 };
+    // place menu under header bottom by default
+    const viewportTop = (headerRect.bottom || 64) + 8; // px from viewport top
+    const viewportHeight = window.innerHeight;
+    const menuHeight = mainMenu.offsetHeight || 260;
+    let topPx = viewportTop;
+    if(topPx + menuHeight > viewportHeight - 12){
+      topPx = Math.max(12, viewportHeight - menuHeight - 12);
+    }
+    mainMenu.style.position = 'fixed';
+    mainMenu.style.top = `${topPx}px`;
+    // prefer placing menu near the right edge of viewport
+    mainMenu.style.right = '12px';
+    mainMenu.style.left = 'auto';
+    mainMenu.style.zIndex = 99999;
+    // Ensure a background and pointer-events exist
+    mainMenu.style.background = mainMenu.style.background || getComputedStyle(document.body).getPropertyValue('--panel-bg') || '#0b1220';
+    mainMenu.style.boxShadow = mainMenu.style.boxShadow || '0 8px 28px rgba(2,6,23,0.6)';
+  }catch(err){
+    // fallback
+    mainMenu.style.position = 'fixed';
+    mainMenu.style.top = '64px';
+    mainMenu.style.right = '12px';
+    mainMenu.style.left = 'auto';
+    mainMenu.style.zIndex = 99999;
+  }
 }
 
 /* Robust showView implementation */
 function showView(name){
   document.querySelectorAll('.view').forEach(v=>v.classList.remove('active'));
-  if(!name || name==='entry') document.getElementById('view-entry').classList.add('active');
-  if(name==='summary') document.getElementById('view-summary').classList.add('active');
-  if(name==='accounts') document.getElementById('view-accounts').classList.add('active');
-  if(name==='settings') document.getElementById('view-settings').classList.add('active');
-  if(name==='user') document.getElementById('view-user').classList.add('active');
-  if(name==='about') document.getElementById('view-about').classList.add('active');
+  if(!name || name==='entry') document.getElementById('view-entry')?.classList.add('active');
+  if(name==='summary') document.getElementById('view-summary')?.classList.add('active');
+  if(name==='accounts') document.getElementById('view-accounts')?.classList.add('active');
+  if(name==='settings') document.getElementById('view-settings')?.classList.add('active');
+  if(name==='user') document.getElementById('view-user')?.classList.add('active');
+  if(name==='about') document.getElementById('view-about')?.classList.add('active');
 
   if(mainMenu) mainMenu.style.display='none';
 
@@ -292,35 +463,37 @@ function initDatePickers(){
   const now = new Date();
   const y = now.getFullYear();
   const m = String(now.getMonth()+1).padStart(2,'0');
-  monthPicker.value = `${y}-${m}`;
-  yearPicker.value = y;
-  accountsMonthInput.value = monthPicker.value;
-  dateInput.value = new Date(Date.now() - getTZOffsetMs()).toISOString().slice(0,10);
+  monthPicker && (monthPicker.value = `${y}-${m}`);
+  yearPicker && (yearPicker.value = y);
+  accountsMonthInput && (accountsMonthInput.value = monthPicker.value);
+  dateInput && (dateInput.value = new Date(Date.now() - getTZOffsetMs()).toISOString().slice(0,10));
   updateSelectedDateLabel();
-  dateInput.addEventListener('change', ()=> { updateSelectedDateLabel(); renderEntries(); });
+  dateInput && dateInput.addEventListener('change', ()=> { updateSelectedDateLabel(); renderEntries(); });
 }
-function updateSelectedDateLabel(){ selectedDateLabel.textContent = formatDateLabel(dateInput.value); }
+function updateSelectedDateLabel(){ if(selectedDateLabel) selectedDateLabel.textContent = formatDateLabel(dateInput.value); }
 
 function renderCategoryPills(){
   const s = loadStore();
   const cats = s.settings && s.settings.categories ? s.settings.categories : DEFAULTS.settings.categories;
+  if(!categoryPillsRow) return;
   categoryPillsRow.innerHTML='';
   cats.forEach(cat=>{
     const b = document.createElement('button'); b.type='button'; b.className='pill'; b.textContent=cat;
-    b.addEventListener('click', ()=> { categoryEl.value = cat; });
+    b.addEventListener('click', ()=> { if(categoryEl) categoryEl.value = cat; });
     categoryPillsRow.appendChild(b);
   });
 }
 
 /* pay subtype */
 function updatePaySubTypeOptions(){
+  if(!payMethodSelect) return;
   const s = loadStore();
   const method = payMethodSelect.value;
   let list = [], label='';
   if(method==='UPI'){ list = s.settings.upiApps; label='UPI app'; }
   else if(method==='Card'){ list = s.settings.cards; label='Card'; }
   else if(method==='Bank'){ list = s.settings.banks; label='Bank'; }
-  else { paySubTypeWrap.style.display='none'; return; }
+  else { if(paySubTypeWrap) paySubTypeWrap.style.display='none'; return; }
   paySubTypeLabel.textContent = label;
   paySubTypeSelect.innerHTML = '';
   list.forEach(i=>{ const o=document.createElement('option'); o.value=i; o.textContent=i; paySubTypeSelect.appendChild(o); });
@@ -346,32 +519,35 @@ function updatePaySubTypeOptions(){
 
 /* transfer UI */
 function updateTransferUI(){
-  const method = payMethodSelect.value;
+  const method = payMethodSelect ? payMethodSelect.value : null;
   const wrap = document.getElementById('transferWrap');
-  if(method === 'Self transfer' || typeEl.value === 'Transfer'){
+  if(!wrap) return;
+  if(method === 'Self transfer' || (typeEl && typeEl.value === 'Transfer')){
     wrap.style.display = 'block';
     const s = loadStore();
     const banks = s.settings && s.settings.banks ? s.settings.banks : DEFAULTS.settings.banks;
     const from = document.getElementById('transferFrom');
     const to = document.getElementById('transferTo');
-    from.innerHTML = ''; to.innerHTML = '';
-    banks.forEach(b=>{
-      const o1 = document.createElement('option'); o1.value=b; o1.textContent=b; from.appendChild(o1);
-      const o2 = document.createElement('option'); o2.value=b; o2.textContent=b; to.appendChild(o2);
-    });
+    if(from && to){
+      from.innerHTML = ''; to.innerHTML = '';
+      banks.forEach(b=>{
+        const o1 = document.createElement('option'); o1.value=b; o1.textContent=b; from.appendChild(o1);
+        const o2 = document.createElement('option'); o2.value=b; o2.textContent=b; to.appendChild(o2);
+      });
+    }
   } else {
     wrap.style.display = 'none';
   }
 }
 
 /* split UI behavior */
-isGroupCheckbox.addEventListener('change', ()=> {
-  splitOptions.style.display = isGroupCheckbox.checked ? 'block' : 'none';
+isGroupCheckbox && isGroupCheckbox.addEventListener('change', ()=> {
+  if(splitOptions) splitOptions.style.display = isGroupCheckbox.checked ? 'block' : 'none';
 });
-splitModeSelect.addEventListener('change', ()=>{
+splitModeSelect && splitModeSelect.addEventListener('change', ()=>{
   const isCustom = splitModeSelect.value === 'custom';
-  customSplitsDiv.style.display = isCustom ? 'block' : 'none';
-  myShareWrap.style.display = isCustom ? 'block' : 'none';
+  if(customSplitsDiv) customSplitsDiv.style.display = isCustom ? 'block' : 'none';
+  if(myShareWrap) myShareWrap.style.display = isCustom ? 'block' : 'none';
 });
 
 /* update selects color for desktop users (workaround) */
@@ -380,7 +556,7 @@ function ensureSelectColors(){
 }
 
 /* ------------- FORM submit (add/update) ------------- */
-form.addEventListener('submit', (e)=>{
+form && form.addEventListener('submit', (e)=>{
   e.preventDefault();
   const dateStr = dateInput.value;
   if(!dateStr){ statusEl.textContent = 'Choose a date'; return; }
@@ -399,6 +575,7 @@ form.addEventListener('submit', (e)=>{
 
   let entry = {
     id: currentEdit ? currentEdit.id : Date.now(),
+    dateStr,
     type,
     description,
     category,
@@ -423,13 +600,11 @@ form.addEventListener('submit', (e)=>{
   }
 
   if(type === 'Transfer' || payMethod === 'Self transfer'){
-    // store as transfer; amountValue used
     entry.type = 'Transfer';
     entry.amount = +amountValue;
     entry.transfer = { from: transferFrom || '', to: transferTo || '' };
   } else {
-    // normal expense/income or split
-    if(isGroupCheckbox.checked){
+    if(isGroupCheckbox && isGroupCheckbox.checked){
       const participants = splitNamesInput.value.trim() ? splitNamesInput.value.split(',').map(s=>s.trim()).filter(Boolean) : [];
       if(participants.length === 0){ alert('Provide participants for split'); return; }
 
@@ -458,23 +633,21 @@ form.addEventListener('submit', (e)=>{
   }
 
   if(currentEdit){
-    // remove old (if present)
+    const s2 = loadStore();
     const oldDate = currentEdit.dateStr;
-    if(s.days[oldDate]){
-      s.days[oldDate] = s.days[oldDate].filter(x => x.id !== currentEdit.id);
-      if(s.days[oldDate].length === 0) delete s.days[oldDate];
-    }
-    if(!s.days[dateStr]) s.days[dateStr] = [];
-    s.days[dateStr].push(entry);
-    saveStore(s);
+    if(s2.days[oldDate]){ s2.days[oldDate] = s2.days[oldDate].filter(x => x.id !== currentEdit.id); if(s2.days[oldDate].length === 0) delete s2.days[oldDate]; }
+    if(!s2.days[dateStr]) s2.days[dateStr] = [];
+    s2.days[dateStr].push(entry);
+    saveStore(s2);
     currentEdit = null;
     submitBtn.textContent = 'Save entry';
     statusEl.textContent = 'Updated ✓';
     showToast('Updated');
   } else {
-    if(!s.days[dateStr]) s.days[dateStr] = [];
-    s.days[dateStr].push(entry);
-    saveStore(s);
+    const s2 = loadStore();
+    if(!s2.days[dateStr]) s2.days[dateStr] = [];
+    s2.days[dateStr].push(entry);
+    saveStore(s2);
     statusEl.textContent = 'Saved ✓';
     showToast('Saved');
   }
@@ -485,13 +658,14 @@ form.addEventListener('submit', (e)=>{
 });
 
 /* ------------- Clear handler ------------- */
-clearBtn.addEventListener('click', ()=>{
+clearBtn && clearBtn.addEventListener('click', ()=>{
   form.reset(); splitOptions.style.display='none'; customSplitsDiv.style.display='none'; myShareWrap.style.display='none';
-  statusEl.textContent = ''; currentEdit = null; submitBtn.textContent = 'Save entry';
+  if(statusEl) statusEl.textContent = ''; currentEdit = null; submitBtn.textContent = 'Save entry';
 });
 
 /* ------------- Render entries (Entry view) ------------- */
 function renderEntries(){
+  if(!entriesListEl) return;
   entriesListEl.innerHTML = '';
   const dateStr = dateInput.value;
   const s = loadStore();
@@ -545,9 +719,9 @@ function updateDailySummary(entries){
     else if(e.type === 'Transfer') { /* ignore in totals but show separately if needed */ }
     else exp += e.amount;
   });
-  sumExpenseEl.textContent = currencyFmt(exp);
-  sumIncomeEl.textContent = currencyFmt(inc);
-  sumNetEl.textContent = currencyFmt(inc - exp);
+  if(sumExpenseEl) sumExpenseEl.textContent = currencyFmt(exp);
+  if(sumIncomeEl) sumIncomeEl.textContent = currencyFmt(inc);
+  if(sumNetEl) sumNetEl.textContent = currencyFmt(inc - exp);
 }
 
 /* ------------- Edit & Delete ------------- */
@@ -555,8 +729,7 @@ function startEdit(dateStr, entry){
   currentEdit = { id: entry.id, dateStr };
   showView('entry');
   dateInput.value = dateStr; updateSelectedDateLabel();
-  typeEl.value = entry.type || 'Expense';
-  // If split -> prefill total amount (my share + others) and split fields
+  if(typeEl) typeEl.value = entry.type || 'Expense';
   if(entry.split && entry.split.enabled){
     const others = entry.split.participants.reduce((a,p) => a + (p.amount||0), 0);
     const total = +( (entry.split.myShare || 0) + others ).toFixed(2);
@@ -570,7 +743,7 @@ function startEdit(dateStr, entry){
     isGroupCheckbox.checked = true; splitOptions.style.display='block';
   } else {
     amountEl.value = entry.amount || '';
-    isGroupCheckbox.checked = false; splitOptions.style.display='none'; customSplitsDiv.style.display='none'; myShareWrap.style.display='none';
+    if(isGroupCheckbox) isGroupCheckbox.checked = false; if(splitOptions) splitOptions.style.display='none'; if(customSplitsDiv) customSplitsDiv.style.display='none'; if(myShareWrap) myShareWrap.style.display='none';
   }
   descriptionEl.value = entry.description || '';
   categoryEl.value = entry.category || '';
@@ -579,7 +752,6 @@ function startEdit(dateStr, entry){
   if(entry.paySubType) paySubTypeSelect.value = entry.paySubType;
   noteInput.value = entry.note || '';
   if(entry.type === 'Transfer' && entry.transfer){
-    // show transfer fields and set the selects
     payMethodSelect.value = 'Self transfer';
     updateTransferUI();
     document.getElementById('transferFrom').value = entry.transfer.from || '';
@@ -602,9 +774,8 @@ function deleteEntry(dateStr, id){
 
 /* ------------- SUMMARY ------------- */
 function initSummaryControls(){
-  dateModeSelect.addEventListener('change', ()=>{
+  dateModeSelect && dateModeSelect.addEventListener('change', ()=>{
     const mode = dateModeSelect.value;
-    // remove day picker if present
     const existing = document.getElementById('dayPickerWrap');
     if(existing) existing.remove();
     if(mode === 'month'){
@@ -616,7 +787,6 @@ function initSummaryControls(){
     } else if(mode === 'day'){
       monthPickerWrap.style.display = 'none';
       yearPickerWrap.style.display = 'none';
-      // create day picker
       const wrap = document.createElement('div'); wrap.id = 'dayPickerWrap'; wrap.style.marginTop='8px'; wrap.innerHTML = '<label>Day</label><input id="dayPicker" type="date" />';
       dateModeSelect.parentElement.parentElement.appendChild(wrap);
       document.getElementById('dayPicker').addEventListener('change', renderSummary);
@@ -626,11 +796,11 @@ function initSummaryControls(){
     }
     renderSummary();
   });
-  monthPicker.addEventListener('change', renderSummary);
-  yearPicker.addEventListener('change', renderSummary);
-  filterPaymentSelect.addEventListener('change', renderSummary);
-  filterCategorySelect.addEventListener('change', renderSummary);
-  typeFilterSelect.addEventListener('change', renderSummary);
+  monthPicker && monthPicker.addEventListener('change', renderSummary);
+  yearPicker && yearPicker.addEventListener('change', renderSummary);
+  filterPaymentSelect && filterPaymentSelect.addEventListener('change', renderSummary);
+  filterCategorySelect && filterCategorySelect.addEventListener('change', renderSummary);
+  typeFilterSelect && typeFilterSelect.addEventListener('change', renderSummary);
 }
 
 /* get rows per page */
@@ -648,9 +818,9 @@ function allEntriesArray(){
 
 function renderSummary(){
   const arr = allEntriesArray();
-  const mode = dateModeSelect.value;
-  const monthVal = monthPicker.value;
-  const yearVal = yearPicker.value;
+  const mode = dateModeSelect ? dateModeSelect.value : 'all';
+  const monthVal = monthPicker ? monthPicker.value : '';
+  const yearVal = yearPicker ? yearPicker.value : '';
   const dayVal = document.getElementById('dayPicker') ? document.getElementById('dayPicker').value : null;
 
   let filtered = arr.filter(e => {
@@ -660,21 +830,23 @@ function renderSummary(){
     return true;
   });
 
-  const typeF = typeFilterSelect.value;
+  const typeF = typeFilterSelect ? typeFilterSelect.value : 'All';
   if(typeF === 'Expense') filtered = filtered.filter(e => !e.split || !e.split.enabled).filter(e => e.type === 'Expense');
   if(typeF === 'Income') filtered = filtered.filter(e => e.type === 'Income');
   if(typeF === 'Split') filtered = filtered.filter(e => e.split && e.split.enabled);
   if(typeF === 'Transfer') filtered = filtered.filter(e => e.type === 'Transfer');
 
-  const payFilter = filterPaymentSelect.value;
+  const payFilter = filterPaymentSelect ? filterPaymentSelect.value : 'All';
   if(payFilter !== 'All') filtered = filtered.filter(e => e.payMethod === payFilter);
 
   const cats = new Set(filtered.map(e => e.category || 'Uncategorized'));
-  filterCategorySelect.innerHTML = '<option>All</option>';
-  Array.from(cats).sort().forEach(c => {
-    const o = document.createElement('option'); o.value = c; o.textContent = c; filterCategorySelect.appendChild(o);
-  });
-  const catNow = filterCategorySelect.value;
+  if(filterCategorySelect){
+    filterCategorySelect.innerHTML = '<option>All</option>';
+    Array.from(cats).sort().forEach(c => {
+      const o = document.createElement('option'); o.value = c; o.textContent = c; filterCategorySelect.appendChild(o);
+    });
+  }
+  const catNow = filterCategorySelect ? filterCategorySelect.value : 'All';
   if(catNow && catNow !== 'All') filtered = filtered.filter(e => (e.category || 'Uncategorized') === catNow);
 
   let totalExp = 0, totalInc = 0, splitOutstanding = 0;
@@ -691,9 +863,9 @@ function renderSummary(){
     if(e.type !== 'Income' && e.type !== 'Transfer') categoryTotals[cat] = (categoryTotals[cat] || 0) + e.amount;
   });
 
-  monthSumExpenseEl.textContent = currencyFmt(totalExp);
-  monthSumIncomeEl.textContent = currencyFmt(totalInc);
-  splitOutstandingEl.textContent = currencyFmt(splitOutstanding);
+  if(monthSumExpenseEl) monthSumExpenseEl.textContent = currencyFmt(totalExp);
+  if(monthSumIncomeEl) monthSumIncomeEl.textContent = currencyFmt(totalInc);
+  if(splitOutstandingEl) splitOutstandingEl.textContent = currencyFmt(splitOutstanding);
 
   drawCategoryPie(categoryTotals);
   renderHistoryList(filtered);
@@ -701,6 +873,7 @@ function renderSummary(){
 
 /* draw pie */
 function drawCategoryPie(categoryTotals){
+  if(!categoryPieCanvas) return;
   const canvas = categoryPieCanvas;
   const ctx = canvas.getContext('2d');
   const rect = canvas.getBoundingClientRect();
@@ -724,20 +897,23 @@ function drawCategoryPie(categoryTotals){
     ctx.beginPath(); ctx.moveTo(cx,cy); ctx.arc(cx,cy,radius,start,end); ctx.closePath(); ctx.fillStyle = colors[cat]; ctx.fill();
     start = end;
   });
-  categoryLegendEl.innerHTML = '';
-  cats.forEach(cat => {
-    const it = document.createElement('div'); it.className = 'legend-item';
-    const left = document.createElement('div'); left.className = 'legend-left';
-    const col = document.createElement('div'); col.style.width='12px'; col.style.height='12px'; col.style.backgroundColor = colors[cat]; col.style.borderRadius='3px';
-    const lab = document.createElement('div'); lab.textContent = cat; lab.style.marginLeft='8px'; lab.style.color = getComputedStyle(document.body).getPropertyValue('--text');
-    left.appendChild(col); left.appendChild(lab);
-    const right = document.createElement('div'); right.textContent = currencyFmt(categoryTotals[cat]) + ` (${((categoryTotals[cat]/total)*100).toFixed(1)}%)`; right.style.fontWeight='600';
-    it.appendChild(left); it.appendChild(right); categoryLegendEl.appendChild(it);
-  });
+  if(categoryLegendEl){
+    categoryLegendEl.innerHTML = '';
+    cats.forEach(cat => {
+      const it = document.createElement('div'); it.className = 'legend-item';
+      const left = document.createElement('div'); left.className = 'legend-left';
+      const col = document.createElement('div'); col.style.width='12px'; col.style.height='12px'; col.style.backgroundColor = colors[cat]; col.style.borderRadius='3px';
+      const lab = document.createElement('div'); lab.textContent = cat; lab.style.marginLeft='8px'; lab.style.color = getComputedStyle(document.body).getPropertyValue('--text');
+      left.appendChild(col); left.appendChild(lab);
+      const right = document.createElement('div'); right.textContent = currencyFmt(categoryTotals[cat]) + ` (${((categoryTotals[cat]/total)*100).toFixed(1)}%)`; right.style.fontWeight='600';
+      it.appendChild(left); it.appendChild(right); categoryLegendEl.appendChild(it);
+    });
+  }
 }
 
 /* render history list */
 function renderHistoryList(entries){
+  if(!summaryHistoryEl) return;
   summaryHistoryEl.innerHTML = '';
   if(!entries.length){ summaryHistoryEl.innerHTML = '<div class="info">No entries for this filter.</div>'; return; }
   const sorted = [...entries].sort((a,b) => a.dateStr === b.dateStr ? b.id - a.id : (a.dateStr < b.dateStr ? 1 : -1));
@@ -832,15 +1008,17 @@ function toggleAllSplit(entryId, dateStr, checked){
 function renderSettingsUI(){
   const s = loadStore();
   const st = s.settings || DEFAULTS.settings;
-  settingsUpiEl.innerHTML=''; settingsCardsEl.innerHTML=''; settingsBanksEl.innerHTML='';
-  st.upiApps.forEach(u => settingsUpiEl.appendChild(makeSettingsPill(u,'upi')));
-  st.cards.forEach(c => settingsCardsEl.appendChild(makeSettingsPill(c,'cards')));
-  st.banks.forEach(b => settingsBanksEl.appendChild(makeSettingsPill(b,'banks')));
+  if(settingsUpiEl) settingsUpiEl.innerHTML='';
+  if(settingsCardsEl) settingsCardsEl.innerHTML='';
+  if(settingsBanksEl) settingsBanksEl.innerHTML='';
+  st.upiApps.forEach(u => settingsUpiEl && settingsUpiEl.appendChild(makeSettingsPill(u,'upi')));
+  st.cards.forEach(c => settingsCardsEl && settingsCardsEl.appendChild(makeSettingsPill(c,'cards')));
+  st.banks.forEach(b => settingsBanksEl && settingsBanksEl.appendChild(makeSettingsPill(b,'banks')));
 
   custom = loadCustom();
-  accentColorInput.value = custom.accent || DEFAULTS.custom.accent;
-  currencySymbolInput.value = custom.currency || DEFAULTS.custom.currency;
-  settingCategoriesInput.value = (st.categories||[]).join(',');
+  if(accentColorInput) accentColorInput.value = custom.accent || DEFAULTS.custom.accent;
+  if(currencySymbolInput) currencySymbolInput.value = custom.currency || DEFAULTS.custom.currency;
+  if(settingCategoriesInput) settingCategoriesInput.value = (st.categories||[]).join(',');
 
   // Mapping area (UPI/Card -> Bank)
   const mapWrapId = 'paymentBankMapWrap';
@@ -850,10 +1028,10 @@ function renderSettingsUI(){
     mapWrap.innerHTML = `<div class="section-title">Map payment items to banks</div>
       <div class="info">Assign each UPI app / Card to a Bank so bank balances update automatically (editable).</div>
       <div id="mapList" style="margin-top:8px; display:flex; flex-direction:column; gap:8px;"></div>`;
-    settingsBanksEl.parentElement.appendChild(mapWrap);
+    settingsBanksEl && settingsBanksEl.parentElement && settingsBanksEl.parentElement.appendChild(mapWrap);
   }
   const mapList = document.getElementById('mapList');
-  mapList.innerHTML = '';
+  if(mapList) mapList.innerHTML = '';
   const s2 = loadStore();
   const banks = s2.settings.banks || DEFAULTS.settings.banks;
   const upi = s2.settings.upiApps || [];
@@ -875,8 +1053,8 @@ function renderSettingsUI(){
     return row;
   }
 
-  upi.forEach(u => mapList.appendChild(makeMapRow(`UPI: ${u}`, `upi:${u}`, (s2.paymentBankMap && s2.paymentBankMap[`upi:${u}`]) || null)));
-  cards.forEach(c => mapList.appendChild(makeMapRow(`Card: ${c}`, `card:${c}`, (s2.paymentBankMap && s2.paymentBankMap[`card:${c}`]) || null)));
+  upi.forEach(u => mapList && mapList.appendChild(makeMapRow(`UPI: ${u}`, `upi:${u}`, (s2.paymentBankMap && s2.paymentBankMap[`upi:${u}`]) || null)));
+  cards.forEach(c => mapList && mapList.appendChild(makeMapRow(`Card: ${c}`, `card:${c}`, (s2.paymentBankMap && s2.paymentBankMap[`card:${c}`]) || null)));
 }
 function makeSettingsPill(text,type){
   const p = document.createElement('div'); p.className = 'settings-pill'; p.textContent = text;
@@ -889,17 +1067,17 @@ function makeSettingsPill(text,type){
   });
   p.appendChild(btn); return p;
 }
-addUpiBtn.addEventListener('click', ()=>{
+addUpiBtn && addUpiBtn.addEventListener('click', ()=>{
   const v = newUpiInput.value.trim(); if(!v) return; const s = loadStore(); if(!s.settings.upiApps.includes(v)) s.settings.upiApps.push(v); saveStore(s); newUpiInput.value=''; renderSettingsUI(); updatePaySubTypeOptions();
 });
-addCardBtn.addEventListener('click', ()=>{
+addCardBtn && addCardBtn.addEventListener('click', ()=>{
   const v = newCardInput.value.trim(); if(!v) return; const s = loadStore(); if(!s.settings.cards.includes(v)) s.settings.cards.push(v); saveStore(s); newCardInput.value=''; renderSettingsUI(); updatePaySubTypeOptions();
 });
-addBankBtn.addEventListener('click', ()=>{
+addBankBtn && addBankBtn.addEventListener('click', ()=>{
   const v = newBankInput.value.trim(); if(!v) return; const s = loadStore(); if(!s.settings.banks.includes(v)) s.settings.banks.push(v); saveStore(s); newBankInput.value=''; renderSettingsUI(); renderCategoryPills(); updatePaySubTypeOptions();
 });
 
-saveCustomizationBtn.addEventListener('click', ()=>{
+saveCustomizationBtn && saveCustomizationBtn.addEventListener('click', ()=>{
   const c = loadCustom();
   c.accent = accentColorInput.value || c.accent;
   c.currency = currencySymbolInput.value || c.currency;
@@ -908,7 +1086,7 @@ saveCustomizationBtn.addEventListener('click', ()=>{
   const s = loadStore(); s.settings.categories = cats; saveStore(s);
   renderCategoryPills(); renderSettingsUI(); showToast('Customization saved');
 });
-resetCustomizationBtn.addEventListener('click', ()=>{
+resetCustomizationBtn && resetCustomizationBtn.addEventListener('click', ()=>{
   localStorage.removeItem(CUSTOM_KEY);
   saveCustom(DEFAULTS.custom);
   const s = loadStore(); s.settings = DEFAULTS.settings; saveStore(s);
@@ -920,7 +1098,7 @@ function renderUserUI(){
   const u = loadUser();
   if(u){ userNameField.value = u.name || ''; securityHintInput.value = u.securityHint || ''; biometricEnabledCheckbox.checked = !!u.biometricPreferred; }
 }
-changePasswordBtn.addEventListener('click', ()=>{
+changePasswordBtn && changePasswordBtn.addEventListener('click', ()=>{
   const u = loadUser(); if(!u){ passwordStatusEl.textContent='No user'; passwordStatusEl.style.color='var(--danger)'; return; }
   const oldPw = oldPasswordInput.value.trim(); const newPw = newPasswordInput.value.trim();
   if(!oldPw || !newPw){ passwordStatusEl.textContent='Fill both'; passwordStatusEl.style.color='var(--danger)'; return; }
@@ -928,6 +1106,13 @@ changePasswordBtn.addEventListener('click', ()=>{
   u.password = newPw; u.name = userNameField.value.trim() || u.name; u.securityHint = securityHintInput.value.trim() || '';
   u.biometricPreferred = biometricEnabledCheckbox.checked;
   saveUser(u); passwordStatusEl.textContent='Updated'; passwordStatusEl.style.color='var(--success)';
+});
+
+/* Save biometric preference right away when toggled */
+biometricEnabledCheckbox && biometricEnabledCheckbox.addEventListener('change', ()=>{
+  const u = loadUser() || { name:'User', password:'' };
+  u.biometricPreferred = biometricEnabledCheckbox.checked;
+  saveUser(u);
 });
 
 /* ------------- EXPORT helpers ------------- */
@@ -961,8 +1146,85 @@ function exportJSON(filteredOnly=false, monthFilter=null){
   const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = 'money_tracker_backup.json'; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
 }
 
+/* Export XLSX using SheetJS */
+function exportXLSX(filteredOnly=false, monthFilter=null){
+  if(typeof XLSX === 'undefined'){ alert('Excel export library not loaded'); return; }
+  const s = loadStore();
+  const rows = [['date','type','description','category','payMethod','paySubType','amount','note','split','transfer']];
+  Object.keys(s.days).sort().forEach(dateStr=>{
+    if(filteredOnly && monthFilter && !dateStr.startsWith(monthFilter)) return;
+    s.days[dateStr].forEach(e=>{
+      rows.push([dateStr,e.type,e.description||'',e.category||'',e.payMethod||'',e.paySubType||'',e.amount||0,e.note||'', e.split?JSON.stringify(e.split):'', e.transfer?JSON.stringify(e.transfer):'']);
+    });
+  });
+  const ws = XLSX.utils.aoa_to_sheet(rows);
+  const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'transactions');
+  const wbout = XLSX.write(wb, {bookType:'xlsx', type:'array'});
+  const blob = new Blob([wbout],{type:'application/octet-stream'});
+  const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = 'money_tracker_export.xlsx'; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+}
+
+/* Import XLSX (convert to same structure) */
+function importXLSXFile(file){
+  if(typeof XLSX === 'undefined'){ alert('Excel import library not loaded'); return; }
+  const r = new FileReader();
+  r.onload = (ev)=>{
+    try{
+      const data = new Uint8Array(ev.target.result);
+      const wb = XLSX.read(data, {type:'array'});
+      const sheetName = wb.SheetNames[0];
+      const rows = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], {header:1});
+      // Expecting header row: date,type,description,category,payMethod,paySubType,amount,note,split,transfer
+      const header = rows[0] || [];
+      const idx = (h)=> header.indexOf(h);
+      const byDate = {};
+      for(let i=1;i<rows.length;i++){
+        const r0 = rows[i];
+        if(!r0 || r0.length===0) continue;
+        const date = r0[idx('date')] || r0[0];
+        const e = {
+          id: Date.now() + i,
+          type: r0[idx('type')] || '',
+          description: r0[idx('description')] || '',
+          category: r0[idx('category')] || '',
+          payMethod: r0[idx('payMethod')] || '',
+          paySubType: r0[idx('paySubType')] || '',
+          amount: parseFloat(r0[idx('amount')]||0) || 0,
+          note: r0[idx('note')] || '',
+          split: null,
+          transfer: null,
+          createdAt: new Date().toISOString()
+        };
+        const splitRaw = r0[idx('split')];
+        if(splitRaw){ try{ e.split = JSON.parse(splitRaw); }catch{} }
+        const trRaw = r0[idx('transfer')];
+        if(trRaw){ try{ e.transfer = JSON.parse(trRaw); }catch{} }
+        if(!byDate[date]) byDate[date]=[];
+        byDate[date].push(e);
+      }
+      // Offer to replace or merge
+      if(confirm('Replace local data with imported XLSX data? (OK=Replace, Cancel=Merge)')){
+        const out = loadStore();
+        out.days = byDate;
+        saveStore(out);
+      } else {
+        const out = loadStore();
+        Object.keys(byDate).forEach(d=>{
+          out.days[d] = (out.days[d] || []).concat(byDate[d]);
+        });
+        saveStore(out);
+      }
+      alert('Import complete. Refreshing UI.');
+      renderEntries(); renderSummary(); renderSettingsUI(); renderBankBalances();
+    }catch(err){
+      console.error(err);
+      alert('Invalid XLSX file');
+    }
+  };
+  r.readAsArrayBuffer(file);
+}
+
 /* ------------- ACCOUNTS & TRANSFERS ------------- */
-// Accounts storage: store.accounts = { 'YYYY-MM': { 'BankName': amount } }
 function setInitialBalanceForBank(month, bank, amount){
   const s = loadStore();
   s.accounts = s.accounts || {};
@@ -985,8 +1247,7 @@ function getBankBalancesForMonth(month){
         if(from) balances[from] = (balances[from] || 0) - amt;
         if(to) balances[to] = (balances[to] || 0) + amt;
       } else {
-        // if payment maps to a bank, apply there
-        if(transactionTouchesBank(e, null)){ // returns true and we also use mappedBank field below
+        if(transactionTouchesBank(e, null)){
           const bname = e.mappedBank || (e.paySubType && (e.payMethod === 'Bank' || e.payMethod === 'Card') ? e.paySubType : null);
           if(bname){
             if(e.type === 'Income') balances[bname] = (balances[bname] || 0) + (+e.amount);
@@ -1003,10 +1264,11 @@ function getBankBalancesForMonth(month){
 function populateAccountsBanks(){
   const s = loadStore();
   const banks = s.settings && s.settings.banks ? s.settings.banks : DEFAULTS.settings.banks;
-  accountsBankSelect.innerHTML = '';
-  banks.forEach(b => { const o=document.createElement('option'); o.value=b; o.textContent=b; accountsBankSelect.appendChild(o); });
+  accountsBankSelect && (accountsBankSelect.innerHTML = '');
+  banks.forEach(b => { if(accountsBankSelect){ const o=document.createElement('option'); o.value=b; o.textContent=b; accountsBankSelect.appendChild(o); }});
 }
 function renderBankBalances(){
+  if(!bankBalancesList) return;
   const month = accountsMonthInput.value;
   bankBalancesList.innerHTML = '';
   if(!month){ bankBalancesList.innerHTML = '<div class="info">Pick month</div>'; return; }
@@ -1022,13 +1284,34 @@ function renderBankBalances(){
     const amt = document.createElement('div'); amt.className = 'entry-amount'; amt.textContent = currencyFmt(balances[b]||0);
     const showBtn = document.createElement('button'); showBtn.className = 'bank-action'; showBtn.innerHTML = `<svg width="16" height="16"><use href="#icon-search"></use></svg> Show transactions`;
     showBtn.addEventListener('click', ()=> openBankTransactionsModal(month, b));
-    right.appendChild(amt); right.appendChild(showBtn); row.appendChild(left); row.appendChild(right); bankBalancesList.appendChild(row);
+    const exportBtn = document.createElement('button'); exportBtn.className = 'btn-small'; exportBtn.textContent = 'Export'; exportBtn.addEventListener('click', ()=> exportBankCSV(month, b));
+    right.appendChild(amt); right.appendChild(showBtn); right.appendChild(exportBtn); row.appendChild(left); row.appendChild(right); bankBalancesList.appendChild(row);
   });
+}
+
+function exportBankCSV(month, bank){
+  if(!confirm('Export bank transactions to CSV?')) return;
+  const s = loadStore();
+  const rows = [['date','type','description','category','payMethod','paySubType','amount','note','transfer']];
+  Object.keys(s.days || {}).sort().forEach(dateStr=>{
+    if(!dateStr.startsWith(month)) return;
+    (s.days[dateStr] || []).forEach(e=>{
+      if(transactionTouchesBank(e, bank)){
+        rows.push([dateStr,e.type,e.description||'',e.category||'',e.payMethod||'',e.paySubType||'',e.amount||0,e.note||'', e.transfer?JSON.stringify(e.transfer):'']);
+      }
+    });
+  });
+  const csv = rows.map(r=> r.map(cell=> {
+    if(cell==null) return '';
+    const s = String(cell).replace(/"/g,'""');
+    return /,|\n|"/.test(s) ? `"${s}"` : s;
+  }).join(',')).join('\n');
+  const blob = new Blob([csv],{type:'text/csv'});
+  const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = `bank_${bank}_${month}.csv`; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
 }
 
 function openBankTransactionsModal(month, bank){
   const s = loadStore();
-  // create modal container
   const modal = document.createElement('div'); modal.className = 'export-modal';
   const card = document.createElement('div'); card.className = 'export-card';
   card.style.maxWidth = '820px';
@@ -1054,7 +1337,6 @@ function openBankTransactionsModal(month, bank){
   const refreshBtn = document.getElementById('bankTxRefresh');
   const listWrap = document.getElementById('bankTxList');
 
-  // populate categories
   const cats = new Set();
   Object.keys(s.days || {}).forEach(d=>{
     if(!d.startsWith(month)) return;
@@ -1071,9 +1353,7 @@ function openBankTransactionsModal(month, bank){
 
   function renderBankTxList(){
     listWrap.innerHTML = '';
-    // gather all transactions in the month that affect the bank (initial included as a row)
     const rows = [];
-    // initial
     const init = (s.accounts && s.accounts[month] && s.accounts[month][bank]) ? +s.accounts[month][bank] : null;
     if(init !== null) rows.push({ date: month + '-01', desc: 'Initial balance', type: 'Init', amount: init, meta: '' });
     Object.keys(s.days || {}).sort().forEach(d=>{
@@ -1084,7 +1364,6 @@ function openBankTransactionsModal(month, bank){
         }
       });
     });
-    // apply filters
     let filtered = rows.slice();
     if(typeSel.value !== 'all') filtered = filtered.filter(r => r.type === typeSel.value);
     if(paySel.value !== 'All') filtered = filtered.filter(r => r.meta && r.meta.includes(paySel.value));
@@ -1108,19 +1387,16 @@ function openBankTransactionsModal(month, bank){
   }
 
   refreshBtn.addEventListener('click', renderBankTxList);
-  // initial render
   renderBankTxList();
 }
 
 /* Helper: whether a transaction touches a specific bank (or any bank if bankName null) */
 function transactionTouchesBank(entry, bankName){
   if(!entry) return false;
-  // if entry type is Transfer and from/to matches
   if(entry.type === 'Transfer' && entry.transfer){
     if(!bankName) return true;
     return entry.transfer.from === bankName || entry.transfer.to === bankName;
   }
-  // If payMethod maps to bank via paySubType or mapping table
   if(entry.payMethod === 'Bank' && entry.paySubType) {
     if(!bankName) return true;
     if(entry.paySubType === bankName) return true;
@@ -1129,7 +1405,6 @@ function transactionTouchesBank(entry, bankName){
     if(!bankName) return true;
     if(entry.paySubType === bankName) return true;
   }
-  // mapping table override
   const s = loadStore();
   const map = s.paymentBankMap || {};
   if(entry.payMethod === 'UPI' && entry.paySubType){
@@ -1142,7 +1417,6 @@ function transactionTouchesBank(entry, bankName){
     if(!bankName && m) return true;
     if(m && m === bankName) return true;
   }
-  // fallback: use paySubType if exact match
   if(entry.paySubType && bankName && entry.paySubType === bankName) return true;
   if(entry.mappedBank && bankName && entry.mappedBank === bankName) return true;
   return false;
@@ -1154,25 +1428,22 @@ function initApp(){
   applyCustom(); setupTheme(); initNav(); initDatePickers(); renderCategoryPills(); updatePaySubTypeOptions();
   renderEntries(); initSummaryControls(); renderSettingsUI(); renderUserUI();
 
-  // ensure selects show correct text color on some browsers
   ensureSelectColors();
 
-  payMethodSelect.addEventListener('change', () => { updatePaySubTypeOptions(); updateTransferUI(); });
-  typeEl.addEventListener('change', updateTransferUI);
+  payMethodSelect && payMethodSelect.addEventListener('change', () => { updatePaySubTypeOptions(); updateTransferUI(); });
+  typeEl && typeEl.addEventListener('change', updateTransferUI);
   updateTransferUI();
 
-  // rows per page
-  rowsPerPageSelect.value = localStorage.getItem('rows_per_page') || '10';
-  rowsPerPageSelect.addEventListener('change', ()=>{
+  rowsPerPageSelect && (rowsPerPageSelect.value = localStorage.getItem('rows_per_page') || '10');
+  rowsPerPageSelect && rowsPerPageSelect.addEventListener('change', ()=>{
     setRowsPerPage(rowsPerPageSelect.value);
     renderSummary();
   });
 
-  // accounts
   populateAccountsBanks();
-  accountsMonthInput.value = monthPicker.value;
-  accountsMonthInput.addEventListener('change', renderBankBalances);
-  saveInitialBtn.addEventListener('click', ()=>{
+  accountsMonthInput && (accountsMonthInput.value = monthPicker.value);
+  accountsMonthInput && accountsMonthInput.addEventListener('change', renderBankBalances);
+  saveInitialBtn && saveInitialBtn.addEventListener('click', ()=>{
     const month = accountsMonthInput.value;
     const bank = accountsBankSelect.value;
     const amount = parseFloat(accountsInitialAmount.value) || 0;
@@ -1183,18 +1454,19 @@ function initApp(){
   });
   renderBankBalances();
 
-  // export modal
-  document.getElementById('summaryExportBtn').addEventListener('click', ()=>{
+  // export modal (summary)
+  summaryExportBtn && summaryExportBtn.addEventListener('click', ()=>{
     const m = document.createElement('div'); m.className='export-modal';
     const c = document.createElement('div'); c.className='export-card';
     c.innerHTML = `<h3>Export / Import</h3>
       <div style="display:flex;gap:8px;margin-top:8px;">
         <button id="expCsv" class="btn-primary">Export CSV (month)</button>
         <button id="expJson" class="btn-secondary">Export JSON (full)</button>
+        <button id="expExcel" class="btn-secondary">Export Excel (.xlsx)</button>
       </div>
       <div style="margin-top:12px;">
-        <label>Import JSON backup</label>
-        <input id="importFile" type="file" accept="application/json" />
+        <label>Import JSON / XLSX backup</label>
+        <input id="importFile" type="file" accept=".json,.xlsx,.xls,.csv" />
       </div>
       <div style="margin-top:10px; text-align:right;"><button id="closeExport" class="btn-secondary">Close</button></div>`;
     m.appendChild(c); document.body.appendChild(m);
@@ -1205,9 +1477,117 @@ function initApp(){
       exportCSV(true, mon);
     });
     document.getElementById('expJson').addEventListener('click', ()=> exportJSON(false,null));
+    document.getElementById('expExcel').addEventListener('click', ()=> {
+      const mon = monthPicker.value;
+      if(!mon){ if(confirm('Export full to XLSX? OK=full, Cancel=pick month first')) exportXLSX(false,null); else return; }
+      exportXLSX(true, mon);
+    });
     document.getElementById('importFile').addEventListener('change', (ev)=>{
       const f = ev.target.files[0];
       if(!f) return;
+      const ext = f.name.split('.').pop().toLowerCase();
+      if(ext === 'json'){
+        const r = new FileReader();
+        r.onload = () => {
+          try{
+            const obj = JSON.parse(r.result);
+            if(confirm('Replace local data with imported data? This will overwrite your current data.')) {
+              saveStore(obj);
+              alert('Imported. Refreshing view.');
+              m.remove();
+              renderEntries(); renderSummary(); renderSettingsUI(); renderBankBalances();
+            }
+          }catch(err){ alert('Invalid JSON'); }
+        };
+        r.readAsText(f);
+      } else if(ext === 'xlsx' || ext === 'xls'){
+        importXLSXFile(f);
+        m.remove();
+      } else if(ext === 'csv'){
+        // CSV import - parse lines matching export CSV format
+        const r = new FileReader();
+        r.onload = ()=>{
+          const text = r.result;
+          const lines = text.split('\n').map(l=>l.trim()).filter(Boolean);
+          const header = lines.shift().split(',');
+          const byDate = {};
+          lines.forEach((ln, i)=>{
+            // use simple CSV split (works for typical exports)
+            const cols = ln.split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/).map(c => c.replace(/^"|"$/g,''));
+            const date = cols[0];
+            const e = {
+              id: Date.now() + i,
+              type: cols[1],
+              description: cols[2],
+              category: cols[3],
+              payMethod: cols[4],
+              paySubType: cols[5],
+              amount: parseFloat(cols[6]||0) || 0,
+              note: cols[7] || '',
+              split: (cols[8] ? JSON.parse(cols[8]) : null),
+              transfer: (cols[9] ? JSON.parse(cols[9]) : null),
+              createdAt: new Date().toISOString()
+            };
+            if(!byDate[date]) byDate[date]=[];
+            byDate[date].push(e);
+          });
+          if(confirm('Replace local data with imported CSV data? (OK=Replace, Cancel=Merge)')){
+            const out = loadStore(); out.days = byDate; saveStore(out);
+          } else {
+            const out = loadStore();
+            Object.keys(byDate).forEach(d=>{
+              out.days[d] = (out.days[d] || []).concat(byDate[d]);
+            });
+            saveStore(out);
+          }
+          alert('CSV import complete. Refreshing UI.');
+          renderEntries(); renderSummary(); renderSettingsUI(); renderBankBalances();
+        };
+        r.readAsText(f);
+      } else {
+        alert('Unsupported import file');
+      }
+    });
+  });
+
+  // export menu quick
+  exportMenuBtn && exportMenuBtn.addEventListener('click', ()=>{
+    showView('summary');
+    setTimeout(()=> { document.getElementById('summaryExportBtn').click(); }, 100);
+  });
+
+  // clear all with export prompt
+  clearAppDataBtn && clearAppDataBtn.addEventListener('click', ()=>{
+    if(confirm('Do you want to export transaction history now? (Recommended)')){
+      document.getElementById('summaryExportBtn').click();
+      return;
+    }
+    if(confirm('Finally confirm: Clear all app data? This cannot be undone.')){
+      localStorage.removeItem(STORAGE_KEY);
+      localStorage.removeItem(USER_KEY);
+      localStorage.removeItem(CUSTOM_KEY);
+      showToast('Cleared local data', false);
+      setTimeout(()=> location.reload(), 800);
+    }
+  });
+
+  // Settings export/import wiring
+  settingsExpCsvBtn && settingsExpCsvBtn.addEventListener('click', ()=>{
+    const mon = monthPicker.value;
+    if(!mon){ alert('Pick month first'); return; }
+    exportCSV(true, mon);
+  });
+  settingsExpJsonBtn && settingsExpJsonBtn.addEventListener('click', ()=> exportJSON(false,null));
+  settingsExpXlsxBtn && settingsExpXlsxBtn.addEventListener('click', ()=> {
+    const mon = monthPicker.value;
+    if(!mon){ if(confirm('Export full to XLSX? OK=full, Cancel=pick month first')) exportXLSX(false,null); else return; }
+    exportXLSX(true, mon);
+  });
+  settingsImportFileInput && settingsImportFileInput.addEventListener('change', (ev)=>{
+    const f = ev.target.files[0];
+    if(!f) return;
+    const ext = f.name.split('.').pop().toLowerCase();
+    if(ext === 'json'){
       const r = new FileReader();
       r.onload = () => {
         try{
@@ -1215,19 +1595,56 @@ function initApp(){
           if(confirm('Replace local data with imported data? This will overwrite your current data.')) {
             saveStore(obj);
             alert('Imported. Refreshing view.');
-            m.remove();
             renderEntries(); renderSummary(); renderSettingsUI(); renderBankBalances();
           }
         }catch(err){ alert('Invalid JSON'); }
       };
       r.readAsText(f);
-    });
-  });
-
-  // export menu quick
-  document.getElementById('exportMenuBtn').addEventListener('click', ()=>{
-    showView('summary');
-    setTimeout(()=> { document.getElementById('summaryExportBtn').click(); }, 100);
+    } else if(ext === 'xlsx' || ext === 'xls'){
+      importXLSXFile(f);
+    } else if(ext === 'csv'){
+      // reuse summary import logic
+      const r = new FileReader();
+      r.onload = ()=>{
+        const text = r.result;
+        const lines = text.split('\n').map(l=>l.trim()).filter(Boolean);
+        const header = lines.shift().split(',');
+        const byDate = {};
+        lines.forEach((ln, i)=>{
+          const cols = ln.split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/).map(c => c.replace(/^"|"$/g,''));
+          const date = cols[0];
+          const e = {
+            id: Date.now() + i,
+            type: cols[1],
+            description: cols[2],
+            category: cols[3],
+            payMethod: cols[4],
+            paySubType: cols[5],
+            amount: parseFloat(cols[6]||0) || 0,
+            note: cols[7] || '',
+            split: (cols[8] ? JSON.parse(cols[8]) : null),
+            transfer: (cols[9] ? JSON.parse(cols[9]) : null),
+            createdAt: new Date().toISOString()
+          };
+          if(!byDate[date]) byDate[date]=[];
+          byDate[date].push(e);
+        });
+        if(confirm('Replace local data with imported CSV data? (OK=Replace, Cancel=Merge)')){
+          const out = loadStore(); out.days = byDate; saveStore(out);
+        } else {
+          const out = loadStore();
+          Object.keys(byDate).forEach(d=>{
+            out.days[d] = (out.days[d] || []).concat(byDate[d]);
+          });
+          saveStore(out);
+        }
+        alert('CSV import complete. Refreshing UI.');
+        renderEntries(); renderSummary(); renderSettingsUI(); renderBankBalances();
+      };
+      r.readAsText(f);
+    } else {
+      alert('Unsupported import file');
+    }
   });
 
   // keyboard shortcut for month export
@@ -1235,8 +1652,10 @@ function initApp(){
     if((e.ctrlKey || e.metaKey) && e.key === 'e'){ e.preventDefault(); const mon = monthPicker.value; if(!mon){ alert('Pick a month first'); return; } exportCSV(true, mon); }
   });
 
-  // ensure pay subtype & transfer UI are populated
   updatePaySubTypeOptions(); updateTransferUI();
+
+  // Ensure menu toggle and menu are placed and sized correctly after first render
+  setTimeout(() => { ensureMenuElementsInBody(); positionMenuToggle(); }, 80);
 }
 
 /* ------------- Small helpers ------------- */
@@ -1248,13 +1667,39 @@ function showToast(text, short=true){
   setTimeout(()=> { t.style.transition = 'opacity .32s ease'; t.style.opacity = '0'; setTimeout(()=> t.remove(), 320); }, short ? 1500 : 3000);
 }
 
-/* ------------- Helper storage wrappers used inside file ------------- */
-function loadStore(){ try{ const raw = localStorage.getItem(STORAGE_KEY); return raw ? JSON.parse(raw) : { version:1, days:{}, settings: DEFAULTS.settings, accounts:{}, paymentBankMap:{} }; }catch(e){ console.error(e); return { version:1, days:{}, settings: DEFAULTS.settings, accounts:{}, paymentBankMap:{} }; } }
-function saveStore(s){ localStorage.setItem(STORAGE_KEY, JSON.stringify(s)); }
-function loadUser(){ try{ const r=localStorage.getItem(USER_KEY); return r?JSON.parse(r):null;}catch{return null;} }
-function saveUser(u){ localStorage.setItem(USER_KEY, JSON.stringify(u)); }
-function loadCustom(){ try{ const r=localStorage.getItem(CUSTOM_KEY); return r?JSON.parse(r):DEFAULTS.custom;}catch{return DEFAULTS.custom;} }
-function saveCustom(c){ localStorage.setItem(CUSTOM_KEY, JSON.stringify(c)); applyCustom(); }
+/* ------------- Swipe navigation for mobile (basic left/right) ------------- */
+(function addSwipe(){
+  let touchStartX = 0, touchStartY = 0;
+  document.addEventListener('touchstart', e=>{ const t=e.touches[0]; touchStartX = t.clientX; touchStartY = t.clientY; });
+  document.addEventListener('touchend', e=>{
+    const t = e.changedTouches[0];
+    const dx = t.clientX - touchStartX;
+    const dy = t.clientY - touchStartY;
+    if(Math.abs(dx) > 60 && Math.abs(dy) < 40){
+      // left swipe -> next tab, right swipe -> prev tab
+      const views = ['entry','summary','accounts','settings','user','about'];
+      const active = [...document.querySelectorAll('.nav-item')].findIndex(n=>n.classList.contains('active'));
+      if(dx < 0 && active < views.length-1){ showView(views[active+1]); }
+      if(dx > 0 && active > 0){ showView(views[active-1]); }
+    }
+  });
+})();
+
+/* ---------- Brand icon click: go to Entry (small enhancement) ---------- */
+document.addEventListener('DOMContentLoaded', ()=> {
+  const brandIcon = document.querySelector('.brand-icon');
+  if(brandIcon){
+    brandIcon.style.cursor = 'pointer';
+    brandIcon.addEventListener('click', ()=> {
+      try {
+        if(typeof showView === 'function') showView('entry');
+        if(typeof closeMainMenu === 'function') closeMainMenu();
+      } catch(err){
+        // noop
+      }
+    });
+  }
+});
 
 /* ------------- Start ------------- */
 setupAuth();
